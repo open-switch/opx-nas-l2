@@ -1,0 +1,96 @@
+#!/usr/bin/python
+# Copyright (c) 2015 Dell Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+#
+# THIS CODE IS PROVIDED ON AN *AS IS* BASIS, WITHOUT WARRANTIES OR
+# CONDITIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT
+# LIMITATION ANY IMPLIED WARRANTIES OR CONDITIONS OF TITLE, FITNESS
+# FOR A PARTICULAR PURPOSE, MERCHANTABLITY OR NON-INFRINGEMENT.
+#
+# See the Apache Version 2.0 License for specific language governing
+# permissions and limitations under the License.
+
+import sys
+import cps_object
+import nas_ut_framework as nas_ut
+import os
+
+
+log_level = {"debug": 1, "info": 2, "notice": 3,
+             "warning": 4, "error": 5, "critical": 6}
+
+mod_ids = {
+    "UNSPECIFIED": 0, "SWITCH": 1, "PORT": 2, "FDB": 3, "VLAN": 4,
+    "VIRTUAL_ROUTER": 5, "ROUTE": 6, "NEXT_HOP": 7, "NEXT_HOP_GROUP": 8,
+    "ROUTER_INTERFACE": 9, "NEIGHBOR": 10, "ACL": 11, "HOST_INTERFACE": 12,
+    "MIRROR": 13, "SAMPLEPACKET": 14, "STP": 15, "LAG": 16, "POLICER": 17,
+    "WRED": 18, "QOS_MAPS": 19, "QOS_QUEUE": 20, "SCHEDULER": 21,
+    "SCHEDULER_GROUP": 22, "ALL": 23,
+}
+
+base_mod_ids = {
+    "SWITCH": "SAI_SWITCH", "PORT": "SAI_PORT",
+    "FDB": "SAI_FDB", "VLAN": "SAI_VLAN",
+    "VIRTUAL_ROUTER": "SAI_ROUTER", "ROUTE":
+    "SAI_ROUTE", "NEXT_HOP": "SAI_NEXT_HOP",
+    "NEXT_HOP_GROUP": "SAI_NEXT_HOP_GROUP",
+    "ROUTER_INTERFACE": "SAI_ROUTER_INTF",
+    "NEIGHBOR": "SAI_NEIGHBOR", "ACL": "ACL", "HOST_INTERFACE": "SAI_HOSTIF",
+    "MIRROR": "SAI_MIRROR", "SAMPLEPACKET":
+    "SAI_SAMPLEPACKET", "STP": "SAI_STP",
+    "LAG": "SAI_LAG", "POLICER": "SAI_POLICER",
+    "WRED": "SAI_WRED", "QOS_MAPS": "SAI_MAPS",
+    "QOS_QUEUE": "SAI_QOS", "SCHEDULER": "SAI_SCHEDULER",
+    "SCHEDULER_GROUP": "SAI_SCHEDULER_GRP"
+}
+
+
+def usage():
+    print """
+nas_switch_log.py set [module_name] [level_name]
+- Set the given module name's logging level to
+  given level_name\n
+
+eg. nas_switch_log.py set ALL debug
+"""
+    print "module_name\n"
+    print mod_ids
+
+    print "\nlevel_name\n"
+    print log_level
+    sys.exit()
+
+
+def parse_args(id, level):
+    if id not in mod_ids:
+        print "Invalid module id ", id
+        usage()
+
+    if level not in log_level:
+        print "Invalid log level ", level
+        usage()
+
+    return mod_ids[id], log_level[level]
+
+
+def nas_diag_set(data_dict):
+    obj = cps_object.CPSObject(module="base-switch/set_log", data=data_dict)
+    print obj.get()
+    nas_ut.get_cb_method("rpc")(obj)
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        usage()
+    id, level = parse_args(sys.argv[2], sys.argv[3])
+    nas_diag_set(
+        {"base-switch/set_log/input/subsystem-id": id,
+         "base-switch/set_log/input/level": level})
+    if sys.argv[2] == "ALL":
+        for key, val in base_mod_ids.items():
+            os.system("/usr/bin/opx_logging_cli enable " + val)
+    else:
+        os.system(
+            "/usr/bin/opx_logging_cli enable " + base_mod_ids[sys.argv[2]])

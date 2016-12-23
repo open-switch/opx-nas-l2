@@ -1,0 +1,23 @@
+Source: libopx-nas-l2
+Section: net
+Priority: optional
+Maintainer: Dell <support@dell.com>
+Build-Depends: debhelper (>= 9),dh-autoreconf,autotools-dev,libopx-common-dev,libopx-nas-common-dev,libopx-cps-dev,libopx-logging-dev,libopx-nas-linux-dev,libopx-nas-ndi-dev,opx-ndi-api-dev
+Standards-Version: 3.9.3
+Vcs-Browser: https://github.com/open-switch/opx-nas-l2
+Vcs-Git: https://github.com/open-switch/opx-nas-l2.git
+
+Package: libopx-nas-l2-1
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends},libopx-nas-common1,libopx-common1,libopx-cps1,libopx-logging1,libopx-nas-linux1,libopx-nas-ndi1
+Description: This package contains L2 Network abstraction features
+
+Package: libopx-nas-l2-dev
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends},libopx-common-dev,libopx-nas-common-dev,libopx-cps-dev,libopx-logging-dev,libopx-nas-linux-dev,libopx-nas-ndi-dev,opx-ndi-api-dev,libopx-nas-l2-1 (=${binary:Version}),libopx-base-model-dev
+Description: This package contains L2 Network abstraction features
+
+Package: opx-nas-l2
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, opx-cps, python-opx-cps
+Description: This package contains L2 Network abstraction features
