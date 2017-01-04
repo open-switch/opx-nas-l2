@@ -1,8 +1,23 @@
-#OPX NAS L2
+# opx-nas-l2
+This repository contains the Layer 2 (L2) component of the network abstraction service (NAS). This handles media access control (MAC) learning, programming spanning-tree protocol (STP) state, mirroring, sFlow, and other switch configurations. 
 
-Layer 2 functionality for the OPX project
-##Description
+## Build
+See [opx-nas-manifest](https://github.com/open-switch/opx-nas-manifest) for more information on common build tools.
 
-This repo contains the Layer 2 portion of the Network abstraction service. This handles MAC learning, programming STP state, mirroring, sflow and other switch configurations.
+###  Build requirements
 
-(c) Dell 2016
+- `opx-model-dev`
+- `opx-common-dev`
+- `opx-nas-common-dev`
+- `opx-object-library-dev`
+- `opx-logging-dev`
+- `opx-nas-ndi-dev`
+- `opx-nas-ndi-api-dev`
+- `opx-nas-linux-dev`
+
+Copy the Debian files to the parent folder (default location of debian files) and run the `opx_build` command.
+
+### Build dependencies
+None
+
+(c) Dell 2017
