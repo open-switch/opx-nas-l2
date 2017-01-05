@@ -1,8 +1,7 @@
-#OPX NAS L2
+# opx-nas-l2
+This repository contains the Layer 2 (L2) component of the network abstraction service (NAS). This handles media access control (MAC) learning, programming spanning-tree protocol (STP) state, mirroring, sFlow, and other switch configurations.  
 
-Layer 2 functionality for the OPX project
-##Description
+## Build
+See [opx-nas-manifest](https://github.com/open-switch/opx-nas-manifest) for more information on common build tools.
 
-This repo contains the Layer 2 portion of the Network abstraction service. This handles MAC learning, programming STP state, mirroring, sflow and other switch configurations.
-
-(c) Dell 2016
+(c) 2017 Dell
