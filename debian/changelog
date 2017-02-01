@@ -1,5 +1,5 @@
-libopx-nas-l2 (1.0.1) main; urgency=medium
+opx-nas-l2 (1.0.1) unstable; urgency=medium
 
-	 * Initial release
+  * Initial release.
 
- -- Dell Team <support@dell.com> Mon, 29 Feb 2016 11:12:18 -0800
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Wed, 01 Feb 2017 09:44:43 -0800
