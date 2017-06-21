@@ -28,5 +28,4 @@
 
 t_std_error nas_switch_cps_init(cps_api_operation_handle_t handle);
 
-
 #endif /* NAS_L2_INC_NAS_SWITCH_CPS_H_ */

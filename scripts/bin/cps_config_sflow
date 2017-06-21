@@ -26,26 +26,26 @@ dir_map = {
 }
 
 def get_id(ifindex):
-    
+
     _ifindex = ifindex
     if not ifindex.isdigit():
         _ifindex = nas_os_utils.if_nametoindex(ifindex)
     obj = cps_object.CPSObject(
-        module=nas_sflow_utils.get_sflow_keys()[0])    
+        module=nas_sflow_utils.get_sflow_keys()[0])
     get = []
     if cps.get([obj.get()], get):
         for i in get:
             obj = cps_object.CPSObject(obj = i)
             r_ifindex = obj.get_attr_data('ifindex')
-            
+
             if str(r_ifindex) == str(_ifindex):
                 print "Session Id "+str(obj.get_attr_data("id"))
                 print "\n"
                 return obj.get_attr_data("id")
-    
+
     print "No session for "+ifindex+" found\n"
     return -1
-        
+
 
 def nas_sflow_op(op, data_dict):
     obj = cps_object.CPSObject(
@@ -64,7 +64,7 @@ def nas_sflow_op(op, data_dict):
 def usage():
     print "\n\ncps_config_sflow.py enable [iface_name] [direction] [rate] - enables packet sampling on a given \
            \n                                              inreface in given direction and returns a id"
-    print "cps_config_sflow.py disable [id] - disable sampling for a given id"
+    print "cps_config_sflow.py disable [id/ifname] - disable sampling for a given id/ifname"
     print "cps_config_sflow.py set_rate [id] [rate] - change the packet sampling rate of the given session id"
     print "cps_config_sflow.py set_direction [id] [direction] - change the packet sampling direction \
           \n                                              of the given session id"
@@ -79,7 +79,10 @@ if __name__ == '__main__':
         usage()
     elif sys.argv[1] == "enable" and len(sys.argv) == 5:
         sflowID = get_id(sys.argv[2])
-        if sflowID == -1:
+        if sflowID != -1 and  sys.argv[4]=="0":
+            print "Attempting to delete ID " + str(sflowID)
+            nas_sflow_op("delete", {"id": sflowID })
+        elif sflowID == -1 and sys.argv[4] != "0":
            nas_sflow_op(
             "create", {"ifindex": nas_os_utils.if_nametoindex(sys.argv[2]), "direction": dir_map[sys.argv[3]],
                        "sampling-rate": sys.argv[4]})
@@ -90,7 +93,12 @@ if __name__ == '__main__':
             {"id": sflowID,
              "direction": dir_map[sys.argv[3]]})
     elif sys.argv[1] == "disable" and len(sys.argv) == 3:
-        nas_sflow_op("delete", {"id": sys.argv[2]})
+        if not sys.argv[2].isdigit():
+            sflowID = get_id(sys.argv[2])
+            nas_sflow_op("delete", {"id": sflowID})
+        else:
+            nas_sflow_op("delete", {"id": sys.argv[2]})
+
     elif sys.argv[1] == "show" and len(sys.argv) == 3:
         nas_sflow_op("get", {"id": sys.argv[2]})
     elif sys.argv[1] == "show" and len(sys.argv) == 2:

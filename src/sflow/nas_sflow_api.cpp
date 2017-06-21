@@ -67,6 +67,11 @@ static bool nas_validate_sflow_entry(nas_sflow_entry_t *entry){
                                     "for creating sFlow session");
         return false;
     }
+
+    if(!entry->attr_set.contains(BASE_SFLOW_ENTRY_IFINDEX)){
+        NAS_SFLOW_LOG(ERR,"Missing ifindex/ifname Parameter for creating sFlow session");
+        return false;
+    }
     return true;
 }
 
@@ -179,6 +184,39 @@ static bool nas_sflow_fill_session_info(cps_api_object_t obj,nas_sflow_entry_t *
             entry->attr_set.add(BASE_SFLOW_ENTRY_IFINDEX);
             break;
 
+        case BASE_SFLOW_ENTRY_IF_INDEX_IFINDEX:
+            if(entry->attr_set.contains(BASE_SFLOW_ENTRY_IFINDEX)){
+                NAS_SFLOW_LOG(ERR,"Multiple Interface Index passed "
+                        "for creating sFlow session");
+                return false;
+            }
+            entry->ifindex = cps_api_object_attr_data_u32(it.attr);
+            entry->attr_set.add(BASE_SFLOW_ENTRY_IFINDEX);
+            break;
+
+        case BASE_SFLOW_ENTRY_IF_NAME_IFNAME:
+            if(entry->attr_set.contains(BASE_SFLOW_ENTRY_IFINDEX)){
+                NAS_SFLOW_LOG(ERR,"Multiple Interface Index passed "
+                            "for creating sFlow session");
+                return false;
+            }
+
+            {
+            auto * ifname = (const char *)cps_api_object_attr_data_bin(it.attr);
+            interface_ctrl_t i;
+            memset(&i,0,sizeof(i));
+            strncpy(i.if_name,ifname,sizeof(i.if_name)-1);
+            i.q_type = HAL_INTF_INFO_FROM_IF_NAME;
+            if (dn_hal_get_interface_info(&i)!=STD_ERR_OK){
+                EV_LOGGING(NAS_L2, DEBUG, "NAS-SFLOW","Can't get interface control information for %s",
+                            ifname);
+                return false;
+            }
+            entry->ifindex = i.if_index;
+            entry->attr_set.add(BASE_SFLOW_ENTRY_IFINDEX);
+            }
+            break;
+
         case BASE_SFLOW_ENTRY_DIRECTION :
             if(entry->attr_set.contains(BASE_SFLOW_ENTRY_DIRECTION)){
                 NAS_SFLOW_LOG(ERR,"Multiple Direction Attributes passed "
@@ -209,16 +247,6 @@ static bool nas_sflow_fill_session_info(cps_api_object_t obj,nas_sflow_entry_t *
 
 
 t_std_error nas_sflow_create_session(cps_api_object_t obj){
-
-    cps_api_object_attr_t ifindex_attr;
-    cps_api_attr_id_t ifindex_attr_id = BASE_SFLOW_ENTRY_IFINDEX;
-
-    ifindex_attr = cps_api_object_e_get (obj, &ifindex_attr_id, 1);
-
-    if (ifindex_attr == NULL) {
-        NAS_SFLOW_LOG(ERR,"No Interface Index passed for creating sFlow session");
-        return STD_ERR(SFLOW,CFG,0);
-    }
 
     nas_sflow_entry_t nas_sflow_entry;
 

@@ -25,17 +25,19 @@
 #include "cps_api_errors.h"
 #include "gtest/gtest.h"
 #include "dell-base-l2-mac.h"
+#include "dell-interface.h"
+#include "dell-base-if.h"
+#include "dell-base-if-vlan.h"
+#include "iana-if-type.h"
 #include "cps_class_map.h"
 #include "cps_api_object_key.h"
 
 #include <iostream>
 #include <stdlib.h>
 #include <net/if.h>
-
-#define MAX_MACS 5
+#include <map>
 
 using namespace std;
-#define STATIC_TYPE false
 
 enum del_filter {
     DEL_MAC = 0x1,
@@ -44,27 +46,83 @@ enum del_filter {
     DEL_ALL = 0x8
 };
 
+using cps_oper = cps_api_return_code_t (*)(cps_api_transaction_params_t * trans,
+        cps_api_object_t object);
+
+static std::map<std::string,cps_oper> trans = {
+    {"delete",cps_api_delete },
+    {"create",cps_api_create},
+    {"set",cps_api_set},
+    {"rpc",cps_api_action},
+};
+
+
+bool nas_mac_exec_transaction(std::string op,cps_api_transaction_params_t *tran, cps_api_object_t obj){
+
+    if(trans[op](tran,obj) != cps_api_ret_code_OK ){
+         std::cout<<"cps api " + op +"failed"<<std::endl;
+         return false;
+    }
+
+    if(cps_api_commit(tran) != cps_api_ret_code_OK ){
+        std::cout<<"cps api commit failed"<<std::endl;
+        return false;
+    }
+
+    if(cps_api_transaction_close(tran) != cps_api_ret_code_OK ){
+        std::cout<<"cps api transaction close failed"<<std::endl;
+        return false;
+    }
+
+    return true;
+}
+
 typedef struct mac_struct_ {
     hal_mac_addr_t mac_addr;
     hal_vlan_id_t  vlan;
     const char     *if_name;
 } mac_struct_t;
 
-mac_struct_t mac_list[MAX_MACS] = { {{0x0, 0xa, 0xb, 0xc, 0xd, 0xe}, 1, "e101-004-0"},
-                                    {{0x0, 0xa, 0xb, 0xc, 0xe, 0xe}, 1, "e101-004-0"},
 
-                                    {{0x0, 0xb, 0xc, 0xd, 0xe, 0xf}, 1, "e101-005-0"},
-                                    {{0x0, 0xb, 0xc, 0xd, 0xd, 0xf}, 1, "e101-014-0"},
+bool nas_mac_vlan_create(){
 
-                                    {{0x0, 0xc, 0xd, 0xe, 0xf, 0xa}, 1, "e101-005-0"}};
+    for(unsigned int ix = 2 ; ix < 100 ; ++ix){
+        cps_api_object_t obj = cps_api_object_create();
 
-bool nas_mac_test_3(){
+        cps_api_key_from_attr_with_qual(cps_api_object_key(obj),
+                                    DELL_BASE_IF_CMN_IF_INTERFACES_INTERFACE_OBJ,
+                                    cps_api_qualifier_TARGET);
 
-    hal_vlan_id_t  vlan_id;
-    int i;
-    cout<<"Entered nas_mac_test_3"<<endl;
+        cps_api_object_attr_add(obj,IF_INTERFACES_INTERFACE_TYPE,
+           (const char *)IF_INTERFACE_TYPE_IANAIFT_IANA_INTERFACE_TYPE_IANAIFT_L2VLAN,
+           sizeof(IF_INTERFACE_TYPE_IANAIFT_IANA_INTERFACE_TYPE_IANAIFT_L2VLAN));
+
+        cps_api_object_attr_add_u32(obj,BASE_IF_VLAN_IF_INTERFACES_INTERFACE_ID,ix);
+
+        const char * mac =  "00:11:11:11:11:11";
+
+        cps_api_object_attr_add(obj, DELL_IF_IF_INTERFACES_INTERFACE_PHYS_ADDRESS, mac, strlen(mac) + 1);
+
+        cps_api_transaction_params_t tr;
+        if ( cps_api_transaction_init(&tr) != cps_api_ret_code_OK ) return false;
+
+        if(!nas_mac_exec_transaction(std::string("create"),&tr,obj)) return false;
+    }
+    return true;
+}
+
+
+bool nas_mac_create_test(){
+
+    mac_struct_t mac_list = { {0x0, 0x0, 0x0, 0x0, 0x0, 0x1}, 1 ,"e101-001-0"};
+    size_t fw_index = 5;
+    size_t bw_index = 4;
+    int index = if_nametoindex(mac_list.if_name);
+    int start_index = index;
+
+    cout<<"Entered nas_mac_create_test"<<endl;
     cout<<"========================"<<endl;
-    for (i = 0; i < MAX_MACS; i ++) {
+    for (unsigned int i = 0; i < 3000 ; i ++) {
         cps_api_transaction_params_t tran;
         if ( cps_api_transaction_init(&tran) != cps_api_ret_code_OK ) return false;
 
@@ -77,223 +135,32 @@ bool nas_mac_test_3(){
             return false;
 
         cps_api_object_set_key(obj,&key);
-        cps_api_object_attr_add(obj,BASE_MAC_TABLE_MAC_ADDRESS, mac_list[i].mac_addr, sizeof(hal_mac_addr_t));
-        cps_api_object_attr_add_u16(obj,BASE_MAC_TABLE_VLAN,mac_list[i].vlan);
+        cps_api_object_attr_add(obj,BASE_MAC_TABLE_MAC_ADDRESS, mac_list.mac_addr, sizeof(hal_mac_addr_t));
+        cps_api_object_attr_add_u16(obj,BASE_MAC_TABLE_VLAN,mac_list.vlan++);
+        cps_api_object_attr_add_u32(obj,BASE_MAC_TABLE_IFINDEX, index++);
 
-        int index = if_nametoindex(mac_list[i].if_name);
-        cout<<" If index in test_2 is "<<index<<endl;
-        cps_api_object_attr_add_u32(obj,BASE_MAC_TABLE_IFINDEX, index);
-        cps_api_object_attr_add_u32(obj,BASE_MAC_TABLE_CONFIGURE_OS, index);
-
-        if(cps_api_create(&tran,obj) != cps_api_ret_code_OK ){
-            cout<<"CPS API CREATE FAILED"<<endl;
-            return false;
+        if((index-start_index)>= 10){
+            index = start_index;
         }
 
-        if(cps_api_commit(&tran) != cps_api_ret_code_OK ) {
-            cout<<"CPS API COMMIT FAILED"<<endl;
-            return false;
+        if(mac_list.vlan == 100){
+            mac_list.vlan = 1;
         }
-        else {
-            cout<<"CPS API COMMIT PASSED"<<endl;
-        }
-
-        cps_api_object_t recvd_obj = cps_api_object_list_get(tran.change_list,0);
-
-        cps_api_object_attr_t vlan_attr = cps_api_get_key_data(recvd_obj, BASE_MAC_TABLE_VLAN);
-        vlan_id = cps_api_object_attr_data_u16(vlan_attr);
-
-        cout<<"VLAN Id from create "<<vlan_id<<endl;
-
-        if(cps_api_transaction_close(&tran) != cps_api_ret_code_OK ){
-            cout<<"CPS API TRANSACTION CLOSED"<<endl;
-            return false;
+        ++mac_list.mac_addr[fw_index];
+        if(mac_list.mac_addr[fw_index] == 255){
+            mac_list.mac_addr[fw_index] = 0;
+            mac_list.mac_addr[bw_index] += 1;
         }
 
-        cout<<"CPS API TRANSACTION CLOSED : SUCCEED"<<endl;
-    } // for loop
+        if(!nas_mac_exec_transaction(std::string("create"),&tran,obj)) return false;
+    }
     return true;
 }
 
 
-bool nas_mac_test_2(int vlan, int index){
+bool nas_mac_delete(int del_filter,hal_vlan_id_t vlan_id, const char * ifname){
 
-    hal_vlan_id_t  vlan_id;
-    hal_mac_addr_t mac_addr;
-
-    cps_api_transaction_params_t tran;
-    cout<<"Entered nas_mac_test_2"<<endl;
-    cout<<"========================"<<endl;
-    if ( cps_api_transaction_init(&tran) != cps_api_ret_code_OK ) return false;
-
-    cps_api_key_t key;
-    cps_api_key_from_attr_with_qual(&key, BASE_MAC_TABLE_OBJ, cps_api_qualifier_TARGET);
-
-    cps_api_object_t obj = cps_api_object_create();
-
-    if(obj == NULL )
-        return false;
-
-    cps_api_object_set_key(obj,&key);
-    mac_addr[0] = 0xd;
-    mac_addr[1] = 0xe;
-    mac_addr[2] = 0xf;
-    mac_addr[3] = 0xa;
-    mac_addr[4] = 0xd;
-    mac_addr[5] = 0xb;
-    cps_api_object_attr_add(obj,BASE_MAC_TABLE_MAC_ADDRESS, mac_addr, sizeof(hal_mac_addr_t));
-    cps_api_object_attr_add_u16(obj,BASE_MAC_TABLE_VLAN,vlan);
-
-    cout<<" If index in test_2 is "<<index<<endl;
-    cps_api_object_attr_add_u32(obj,BASE_MAC_TABLE_IFINDEX, index);
-
-    if(cps_api_create(&tran,obj) != cps_api_ret_code_OK ){
-        cout<<"CPS API CREATE FAILED"<<endl;
-        return false;
-    }
-
-    if(cps_api_commit(&tran) != cps_api_ret_code_OK ) {
-        cout<<"CPS API COMMIT FAILED"<<endl;
-        return false;
-    }
-    else {
-        cout<<"CPS API COMMIT PASSED"<<endl;
-    }
-
-    cps_api_object_t recvd_obj = cps_api_object_list_get(tran.change_list,0);
-
-    cps_api_object_attr_t vlan_attr = cps_api_get_key_data(recvd_obj, BASE_MAC_TABLE_VLAN);
-    vlan_id = cps_api_object_attr_data_u16(vlan_attr);
-
-    cout<<"VLAN Id from create "<<vlan_id<<endl;
-
-    if(cps_api_transaction_close(&tran) != cps_api_ret_code_OK ){
-        cout<<"CPS API TRANSACTION CLOSED"<<endl;
-        return false;
-    }
-
-    cout<<"CPS API TRANSACTION CLOSED : SUCCEED"<<endl;
-    return true;
-}
-
-bool nas_mac_test(){
-
-    hal_vlan_id_t  vlan_id;
-    hal_mac_addr_t mac_addr;
-
-    cps_api_transaction_params_t tran;
-    cout<<"Entered nas_mac_test"<<endl;
-    cout<<"========================"<<endl;
-    if ( cps_api_transaction_init(&tran) != cps_api_ret_code_OK ) return false;
-
-    cps_api_key_t key;
-    cps_api_key_from_attr_with_qual(&key, BASE_MAC_TABLE_OBJ, cps_api_qualifier_TARGET);
-
-    cps_api_object_t obj = cps_api_object_create();
-
-    if(obj == NULL )
-        return false;
-
-    cps_api_object_set_key(obj,&key);
-    mac_addr[0] = 0xa;
-    mac_addr[1] = 0xb;
-    mac_addr[2] = 0xc;
-    mac_addr[3] = 0xd;
-    mac_addr[4] = 0xe;
-    mac_addr[5] = 0xf;
-
-    cps_api_object_attr_add(obj,BASE_MAC_TABLE_MAC_ADDRESS, mac_addr, sizeof(hal_mac_addr_t));
-    cps_api_object_attr_add_u16(obj,BASE_MAC_TABLE_VLAN,200);
-
-    const char *if_name = "e00-4";
-    int index = if_nametoindex(if_name);
-    cout<<" If index in test is "<<index<<endl;
-    cps_api_object_attr_add_u32(obj,BASE_MAC_TABLE_IFINDEX, index);
-
-    if(cps_api_create(&tran,obj) != cps_api_ret_code_OK ){
-        cout<<"CPS API CREATE FAILED"<<endl;
-        return false;
-    }
-
-    if(cps_api_commit(&tran) != cps_api_ret_code_OK ) {
-        cout<<"CPS API COMMIT FAILED"<<endl;
-        return false;
-    }
-    else {
-        cout<<"CPS API COMMIT PASSED"<<endl;
-    }
-
-    cps_api_object_t recvd_obj = cps_api_object_list_get(tran.change_list,0);
-
-    cps_api_object_attr_t vlan_attr = cps_api_get_key_data(recvd_obj, BASE_MAC_TABLE_VLAN);
-    vlan_id = cps_api_object_attr_data_u16(vlan_attr);
-
-    cout<<"VLAN Id from create "<<vlan_id<<endl;
-
-    if(cps_api_transaction_close(&tran) != cps_api_ret_code_OK ){
-        cout<<"CPS API TRANSACTION CLOSED"<<endl;
-        return false;
-    }
-
-    cout<<"CPS API TRANSACTION CLOSED : SUCCEED"<<endl;
-    return true;
-}
-
-bool nas_mac_add_entry(){
-
-    cps_api_transaction_params_t tran;
-    hal_mac_addr_t mac_addr;
-
-    if ( cps_api_transaction_init(&tran) != cps_api_ret_code_OK ) return false;
-
-    cps_api_key_t key;
-    cps_api_key_from_attr_with_qual(&key, BASE_MAC_TABLE_OBJ, cps_api_qualifier_TARGET);
-
-    cps_api_object_t obj = cps_api_object_create();
-
-    if (obj == NULL)
-        return false;
-
-    cps_api_object_set_key(obj,&key);
-
-    mac_addr[0] = 'a';
-    mac_addr[1] = 'c';
-    mac_addr[2] = 'e';
-    mac_addr[3] = 'b';
-    mac_addr[4] = 'd';
-    mac_addr[5] = 'f';
-
-    const char *if_name = "e00-8";
-    int index = if_nametoindex(if_name);
-    cps_api_object_attr_add_u32(obj,BASE_MAC_TABLE_IFINDEX, index);
-    cps_api_object_attr_add_u32(obj,BASE_MAC_TABLE_VLAN, 400);
-    cps_api_object_attr_add(obj,BASE_MAC_TABLE_MAC_ADDRESS, mac_addr, sizeof(hal_mac_addr_t));
-
-    if(cps_api_set(&tran,obj) != cps_api_ret_code_OK ){
-        cout<<"CPS API SET FAILED"<<endl;
-        return false;
-    }
-
-    cout<<"CPS API SET PASSED"<<endl;
-
-    if(cps_api_commit(&tran) != cps_api_ret_code_OK ){
-        cout<<"CPS API COMMIT FAILED"<<endl;
-        return false;
-    }
-
-    cout<<"CPS API COMMIT PASSED"<<endl;
-
-    if(cps_api_transaction_close(&tran) != cps_api_ret_code_OK ){
-        cout<<"CPS API TRANSACTION CLOSED"<<endl;
-        return false;
-    }
-
-    cout<<"CPS API TRANSACTION CLOSED : SUCCEED"<<endl;
-
-    return true;
-}
-
-bool nas_mac_delete(int array_index, int del_filter, bool static_type){
+    mac_struct_t mac_list = { {0x0, 0x0, 0x0, 0x0, 0x0, 0x1}, 1 ,"e101-001-0"};
 
     cps_api_transaction_params_t tran;
 
@@ -312,45 +179,21 @@ bool nas_mac_delete(int array_index, int del_filter, bool static_type){
     cps_api_object_set_key(obj,&key);
     if (del_filter & DEL_MAC) {
         cps_api_object_attr_add(obj,BASE_MAC_QUERY_MAC_ADDRESS,
-                                mac_list[array_index].mac_addr, sizeof(hal_mac_addr_t));
+                                mac_list.mac_addr, sizeof(hal_mac_addr_t));
     }
-    if (del_filter & DEL_VLAN) {
-        cps_api_object_attr_add_u32(obj,BASE_MAC_QUERY_VLAN, mac_list[array_index].vlan);
+    if (del_filter & DEL_VLAN || del_filter & DEL_MAC) {
+        cps_api_object_attr_add_u32(obj,BASE_MAC_QUERY_VLAN, vlan_id);
     }
-    if (del_filter & DEL_IFINDEX) {
-        int index = if_nametoindex(mac_list[array_index].if_name);
+    if (del_filter & DEL_IFINDEX || del_filter & DEL_MAC) {
+        int index = if_nametoindex(ifname);
         cps_api_object_attr_add_u32(obj,BASE_MAC_QUERY_IFINDEX, index);
     }
-    else if (del_filter & DEL_ALL) {
-        // set no flags ?
-    }
-    if (static_type) {
-        cps_api_object_attr_add_u32(obj,BASE_MAC_TABLE_STATIC, static_type);
-    }
 
-    if(cps_api_delete(&tran,obj) != cps_api_ret_code_OK ){
-        cout<<"CPS API DELETE FAILED"<<endl;
-        return false;
-    }
-
-    cout<<"CPS API DELETE PASSED"<<endl;
-
-    if(cps_api_commit(&tran) != cps_api_ret_code_OK ){
-        cout<<"CPS API COMMIT FAILED"<<endl;
-        return false;
-    }
-
-    cout<<"CPS API COMMIT PASSED"<<endl;
-
-    if(cps_api_transaction_close(&tran) != cps_api_ret_code_OK ){
-        cout<<"CPS API TRANSACTION CLOSED"<<endl;
-        return false;
-    }
-
-    cout<<"CPS API TRANSACTION CLOSED : SUCCEED"<<endl;
+    if(!nas_mac_exec_transaction(std::string("delete"),&tran,obj)) return false;
 
     return true;
 }
+
 
 bool nas_mac_flush_test(bool vlan,bool ifindex){
 
@@ -389,249 +232,37 @@ bool nas_mac_flush_test(bool vlan,bool ifindex){
         }
     }
 
-
-    if(cps_api_action(&tran,obj) != cps_api_ret_code_OK ){
-        cout<<"CPS API RPC FAILED"<<endl;
-        return false;
-    }
-
-    if(cps_api_commit(&tran) != cps_api_ret_code_OK ){
-        cout<<"CPS API COMMIT FAILED"<<endl;
-        return false;
-    }
-
-    if(cps_api_transaction_close(&tran) != cps_api_ret_code_OK ){
-        cout<<"CPS API TRANSACTION CLOSED"<<endl;
-        return false;
-    }
+    if(!nas_mac_exec_transaction(std::string("rpc"),&tran,obj)) return false;
 
     return true;
 }
 
-bool nas_mac_get_test(bool static_type){
+bool nas_mac_bulk_flush_test(){
 
-    cps_api_get_params_t gp;
-    cout<<"Entered nas_mac_get_test"<<endl;
-    cout<<"========================"<<endl;
-    cps_api_get_request_init(&gp);
-    cps_api_object_t obj = cps_api_object_list_create_obj_and_append(gp.filters);
-    if(obj == NULL){
-        std::cout<<"Failed to create and append object to list "<<std::endl;
-        return false;
-    }
+    cps_api_transaction_params_t tran;
+    if ( cps_api_transaction_init(&tran) != cps_api_ret_code_OK ) return false;
+
     cps_api_key_t key;
+    cps_api_key_from_attr_with_qual(&key, BASE_MAC_FLUSH_OBJ, cps_api_qualifier_TARGET);
 
-    cps_api_key_from_attr_with_qual(&key, BASE_MAC_QUERY_OBJ, cps_api_qualifier_TARGET);
-    cps_api_object_set_key(obj,&key);
-    cps_api_object_attr_add_u16(obj,BASE_MAC_QUERY_STATIC, static_type);
+    cps_api_object_t obj = cps_api_object_create();
 
-    bool rc = false;
-
-    if (cps_api_get(&gp)==cps_api_ret_code_OK) {
-
-        size_t mx = cps_api_object_list_size(gp.list);
-        cout<<"Returned Objects..."<<mx<<endl;
-        for (size_t ix = 0 ; ix < mx ; ++ix ) {
-            cps_api_object_t obj = cps_api_object_list_get(gp.list,ix);
-            cps_api_object_attr_t vlan_id = cps_api_object_attr_get(obj,BASE_MAC_QUERY_VLAN);
-            cps_api_object_attr_t ifindex = cps_api_object_attr_get(obj,BASE_MAC_QUERY_IFINDEX);
-            cps_api_object_attr_t mac_addr = cps_api_object_attr_get(obj,BASE_MAC_QUERY_MAC_ADDRESS);
-            cout<< " "<<endl;
-            cout<<"VLAN ID "<<cps_api_object_attr_data_u16(vlan_id)<<endl;
-            cout<<"IFINDEX "<<cps_api_object_attr_data_u32(ifindex)<<endl;
-            char mt[6];
-            char mstring[20];
-            memcpy(mt, cps_api_object_attr_data_bin(mac_addr), 6);
-            sprintf(mstring, "%x:%x:%x:%x:%x:%x", mt[0], mt[1], mt[2], mt[3], mt[4], mt[5]);
-            cout<<"MAC              "<<mstring<<endl;
-        }
-        rc = true;
-    }
-
-    cps_api_get_request_close(&gp);
-    return rc;
-}
-bool nas_mac_get_by_vlan_test() {
-
-    cps_api_get_params_t gp;
-    cout<<"Entered nas_mac_get_by_vlan_test"<<endl;
-    cout<<"========================"<<endl;
-    cps_api_get_request_init(&gp);
-    cps_api_object_t obj = cps_api_object_list_create_obj_and_append(gp.filters);
-    if(obj == NULL){
-        std::cout<<"Failed to create and append object to list "<<std::endl;
+    if(obj == NULL)
         return false;
-    }
-    cps_api_key_t key;
 
-    cps_api_key_from_attr_with_qual(&key,BASE_MAC_QUERY_OBJ,cps_api_qualifier_TARGET);
     cps_api_object_set_key(obj,&key);
-
-    cps_api_object_attr_add_u32(obj,BASE_MAC_QUERY_VLAN, 100);
-    cps_api_object_attr_add_u16(obj,BASE_MAC_QUERY_STATIC, 1);
-    cps_api_object_attr_add_u32(obj,BASE_MAC_QUERY_REQUEST_TYPE, BASE_MAC_COMMAND_REQUEST_TYPE_CMD_TYPE_VLAN);
-
-    bool rc = false;
-
-    if (cps_api_get(&gp)==cps_api_ret_code_OK) {
-
-        size_t mx = cps_api_object_list_size(gp.list);
-        cout<<"VLAN BASED QUERY *********** Returned Objects..."<<mx<<endl;
-        for (size_t ix = 0 ; ix < mx ; ++ix ) {
-            cps_api_object_t obj = cps_api_object_list_get(gp.list,ix);
-            cps_api_object_attr_t vlan_id = cps_api_object_attr_get(obj,BASE_MAC_QUERY_VLAN);
-            cps_api_object_attr_t ifindex = cps_api_object_attr_get(obj,BASE_MAC_QUERY_IFINDEX);
-            cps_api_object_attr_t mac_addr = cps_api_object_attr_get(obj,BASE_MAC_QUERY_MAC_ADDRESS);
-            cout<<"VLAN ID **********"<<cps_api_object_attr_data_u16(vlan_id)<<endl;
-            cout<<"IFINDEX **********"<<cps_api_object_attr_data_u32(ifindex)<<endl;
-            char mt[6];
-            char mstring[20];
-            memcpy(mt, cps_api_object_attr_data_bin(mac_addr), 6);
-            sprintf(mstring, "%x:%x:%x:%x:%x:%x", mt[0], mt[1], mt[2], mt[3], mt[4], mt[5]);
-            cout<<"MAC              "<<mstring<<endl;
-        }
-        rc = true;
+    cps_api_attr_id_t ids[3] = {BASE_MAC_FLUSH_INPUT_FILTER,0, BASE_MAC_FLUSH_INPUT_FILTER_VLAN };
+    const int ids_len = sizeof(ids)/sizeof(ids[0]);
+    for(uint16_t ix=1; ix<1024; ++ix){
+        ids[1]=ix;
+        cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U16,&ix,sizeof(ix));
     }
 
-    cps_api_get_request_close(&gp);
-    return rc;
+    if(!nas_mac_exec_transaction(std::string("rpc"),&tran,obj)) return false;
+
+    return true;
 }
 
-bool nas_mac_get_by_mac_test(int array_index) {
-
-    cps_api_get_params_t gp;
-    cout<<"Entered nas_mac_get_by_mac_test"<<endl;
-    cout<<"========================"<<endl;
-    cps_api_get_request_init(&gp);
-    cps_api_object_t obj = cps_api_object_list_create_obj_and_append(gp.filters);
-    if(obj == NULL){
-        std::cout<<"Failed to create and append object to list "<<std::endl;
-        return false;
-    }
-    cps_api_key_t key;
-
-    cps_api_key_from_attr_with_qual(&key,BASE_MAC_QUERY_OBJ,cps_api_qualifier_TARGET);
-    cps_api_object_set_key(obj,&key);
-
-    cps_api_object_attr_add(obj,BASE_MAC_QUERY_MAC_ADDRESS, mac_list[array_index].mac_addr, sizeof(hal_mac_addr_t));
-    cps_api_object_attr_add_u16(obj,BASE_MAC_QUERY_STATIC, 1);
-    cps_api_object_attr_add_u32(obj,BASE_MAC_QUERY_REQUEST_TYPE, BASE_MAC_COMMAND_REQUEST_TYPE_CMD_TYPE_ADDRESS);
-
-    bool rc = false;
-
-    if (cps_api_get(&gp)==cps_api_ret_code_OK) {
-
-        size_t mx = cps_api_object_list_size(gp.list);
-        cout<<"MAC BASED QUERY *********** Returned Objects..."<<mx<<endl;
-        for (size_t ix = 0 ; ix < mx ; ++ix ) {
-            cps_api_object_t obj = cps_api_object_list_get(gp.list,ix);
-            cps_api_object_attr_t vlan_id = cps_api_object_attr_get(obj,BASE_MAC_QUERY_VLAN);
-            cps_api_object_attr_t ifindex = cps_api_object_attr_get(obj,BASE_MAC_QUERY_IFINDEX);
-            cps_api_object_attr_t mac_addr = cps_api_object_attr_get(obj,BASE_MAC_QUERY_MAC_ADDRESS);
-            cout<<"VLAN ID **********"<<cps_api_object_attr_data_u16(vlan_id)<<endl;
-            cout<<"IFINDEX **********"<<cps_api_object_attr_data_u32(ifindex)<<endl;
-            char mt[6];
-            char mstring[20];
-            memcpy(mt, cps_api_object_attr_data_bin(mac_addr), 6);
-            sprintf(mstring, "%x:%x:%x:%x:%x:%x", mt[0], mt[1], mt[2], mt[3], mt[4], mt[5]);
-            cout<<"MAC              "<<mstring<<endl;
-        }
-        rc = true;
-    }
-
-    cps_api_get_request_close(&gp);
-    return rc;
-}
-bool nas_mac_get_count_test(int vlan, int if_index, bool static_type) {
-    cps_api_get_params_t gp;
-    cout<<"Entered nas_mac_get_count_test"<<endl;
-    cout<<"========================"<<endl;
-    cps_api_get_request_init(&gp);
-    cps_api_object_t obj = cps_api_object_list_create_obj_and_append(gp.filters);
-    cout<<"MAC Count : ********** querying vlan "<< vlan << " : if_index "<< if_index<<endl;
-    if(obj == NULL){
-        std::cout<<"Failed to create and append object to list "<<std::endl;
-        return false;
-    }
-    cps_api_key_t key;
-    cps_api_key_from_attr_with_qual(&key,BASE_MAC_QUERY_OBJ,cps_api_qualifier_TARGET);
-    cps_api_object_set_key(obj,&key);
-
-    if (vlan) {
-        cps_api_object_attr_add_u32(obj,BASE_MAC_QUERY_VLAN, vlan);
-    }
-    if (if_index) {
-        cps_api_object_attr_add_u32(obj,BASE_MAC_QUERY_IFINDEX, if_index);
-    }
-
-    if (static_type) {
-        cps_api_object_attr_add_u16(obj,BASE_MAC_QUERY_STATIC, 1);
-    }
-    cps_api_object_attr_add_u32(obj,BASE_MAC_QUERY_REQUEST_TYPE, BASE_MAC_COMMAND_REQUEST_TYPE_CMD_TYPE_COUNT);
-    bool rc = false;
-
-    if (cps_api_get(&gp)==cps_api_ret_code_OK) {
-
-        size_t mx = cps_api_object_list_size(gp.list);
-        for (size_t ix = 0 ; ix < mx ; ++ix ) {
-            cps_api_object_t obj = cps_api_object_list_get(gp.list,ix);
-            cps_api_object_attr_t mac_count = cps_api_object_attr_get(obj,BASE_MAC_QUERY_COUNT);
-            cout<<"MAC Count : **********"<<cps_api_object_attr_data_u32(mac_count)<<endl;
-        }
-        rc = true;
-    }
-
-    cps_api_get_request_close(&gp);
-    return rc;
-}
-
-bool nas_mac_get_by_if_test() {
-
-    cps_api_get_params_t gp;
-    cout<<"Entered nas_mac_get_by_it_test"<<endl;
-    cout<<"========================"<<endl;
-    cps_api_get_request_init(&gp);
-    const char *if_name = "e00-4";
-    int index = if_nametoindex(if_name);
-    cps_api_object_t obj = cps_api_object_list_create_obj_and_append(gp.filters);
-    if(obj == NULL){
-        std::cout<<"Failed to create and append object to list "<<std::endl;
-        return false;
-    }
-    cps_api_key_t key;
-
-    cps_api_key_from_attr_with_qual(&key,BASE_MAC_QUERY_OBJ,cps_api_qualifier_TARGET);
-    cps_api_object_set_key(obj,&key);
-
-    cps_api_object_attr_add_u32(obj,BASE_MAC_QUERY_IFINDEX, index);
-    cps_api_object_attr_add_u16(obj,BASE_MAC_QUERY_STATIC, 1);
-    cps_api_object_attr_add_u32(obj,BASE_MAC_QUERY_REQUEST_TYPE, BASE_MAC_COMMAND_REQUEST_TYPE_CMD_TYPE_INTERFACE);
-
-    bool rc = false;
-
-    if (cps_api_get(&gp)==cps_api_ret_code_OK) {
-
-        size_t mx = cps_api_object_list_size(gp.list);
-        cout<<"IF BASED QUERY *********** Returned Objects..."<<mx<<endl;
-        for (size_t ix = 0 ; ix < mx ; ++ix ) {
-            cps_api_object_t obj = cps_api_object_list_get(gp.list,ix);
-            cps_api_object_attr_t vlan_id = cps_api_object_attr_get(obj,BASE_MAC_QUERY_VLAN);
-            cps_api_object_attr_t ifindex = cps_api_object_attr_get(obj,BASE_MAC_QUERY_IFINDEX);
-            cps_api_object_attr_t mac_addr = cps_api_object_attr_get(obj,BASE_MAC_QUERY_MAC_ADDRESS);
-            cout<<"VLAN ID **********"<<cps_api_object_attr_data_u16(vlan_id)<<endl;
-            cout<<"IFINDEX **********"<<cps_api_object_attr_data_u32(ifindex)<<endl;
-            char mt[6];
-            char mstring[20];
-            memcpy(mt, cps_api_object_attr_data_bin(mac_addr), 6);
-            sprintf(mstring, "%x:%x:%x:%x:%x:%x", mt[0], mt[1], mt[2], mt[3], mt[4], mt[5]);
-            cout<<"MAC              "<<mstring<<endl;
-        }
-        rc = true;
-    }
-
-    cps_api_get_request_close(&gp);
-    return rc;
-}
 
 bool nas_mac_auto_flush_management(bool enable){
 
@@ -649,38 +280,27 @@ bool nas_mac_auto_flush_management(bool enable){
     cps_api_object_set_key(obj,&key);
     cps_api_object_attr_add_u32(obj,BASE_MAC_FLUSH_MANAGEMENT_ENABLE,enable);
 
-    if(cps_api_create(&tran,obj) != cps_api_ret_code_OK ){
-        cout<<"CPS API CREATE FAILED"<<endl;
-        return false;
+    if(!nas_mac_exec_transaction(std::string("create"),&tran,obj)) return false;
+
+    cps_api_get_params_t gp;
+    cps_api_get_request_init(&gp);
+    cps_api_key_t key1;
+    cps_api_key_from_attr_with_qual(&key1,BASE_MAC_FLUSH_MANAGEMENT_OBJ,cps_api_qualifier_TARGET);
+    gp.key_count = 1;
+    gp.keys = &key1;
+
+    bool rc = false;
+    if (cps_api_get(&gp)==cps_api_ret_code_OK) {
+        size_t mx = cps_api_object_list_size(gp.list);
+        for (size_t ix = 0 ; ix < mx ; ++ix ) {
+            cps_api_object_t obj = cps_api_object_list_get(gp.list,ix);
+            cps_api_object_attr_t auto_mgmt = cps_api_object_attr_get(obj,BASE_MAC_FLUSH_MANAGEMENT_ENABLE);
+            if(auto_mgmt){
+                cout<<"Auto MAC Management Value : "<<cps_api_object_attr_data_u32(auto_mgmt)<<endl;
+            }
+        }
+        rc = true;
     }
-
-    if(cps_api_commit(&tran) != cps_api_ret_code_OK ) {
-        cout<<"CPS API COMMIT FAILED"<<endl;
-        return false;
-    }else{
-        cout<<"CPS API COMMIT PASSED"<<endl;
-    }
-
-     cps_api_get_params_t gp;
-     cps_api_get_request_init(&gp);
-     cps_api_key_t key1;
-     cps_api_key_from_attr_with_qual(&key1,BASE_MAC_FLUSH_MANAGEMENT_OBJ,cps_api_qualifier_TARGET);
-     gp.key_count = 1;
-     gp.keys = &key1;
-
-     bool rc = false;
-     if (cps_api_get(&gp)==cps_api_ret_code_OK) {
-         size_t mx = cps_api_object_list_size(gp.list);
-         for (size_t ix = 0 ; ix < mx ; ++ix ) {
-             cps_api_object_t obj = cps_api_object_list_get(gp.list,ix);
-             cps_api_object_attr_t auto_mgmt = cps_api_object_attr_get(obj,BASE_MAC_FLUSH_MANAGEMENT_ENABLE);
-             if(auto_mgmt){
-                 cout<<"Auto MAC Management Value : "<<cps_api_object_attr_data_u32(auto_mgmt)<<endl;
-             }
-
-         }
-         rc = true;
-     }
 
     cps_api_get_request_close(&gp);
     return rc;
@@ -689,75 +309,29 @@ bool nas_mac_auto_flush_management(bool enable){
 
 TEST(cps_api_events,mac_test) {
 
-    ASSERT_TRUE(nas_mac_test_3());
-    ASSERT_TRUE(nas_mac_get_by_vlan_test());
-    ASSERT_TRUE(nas_mac_get_by_mac_test(1)); // pass the index into mac_list
-    ASSERT_TRUE(nas_mac_get_by_if_test());
-    ASSERT_TRUE(nas_mac_get_count_test(0, 0, true));
-    ASSERT_TRUE(nas_mac_get_count_test(100, 18, true));
-    ASSERT_TRUE(nas_mac_get_count_test(100, 0, STATIC_TYPE));
-    ASSERT_TRUE(nas_mac_get_count_test(200, 0, true));
-    ASSERT_TRUE(nas_mac_get_count_test(0, 16, true));
-    ASSERT_TRUE(nas_mac_get_count_test(201 , 16, true));
-    ASSERT_TRUE(nas_mac_get_count_test(201 , 0, true));
-    ASSERT_TRUE(nas_mac_get_count_test(0 , 18, true));
-    ASSERT_TRUE(nas_mac_get_count_test(0 , 18, false));
-    ASSERT_TRUE(nas_mac_get_test(true));
-    cout<<"DEL_IFINDEX "<<endl;
-    ASSERT_TRUE(nas_mac_test_3());
-    ASSERT_TRUE(nas_mac_get_test(STATIC_TYPE));
-    ASSERT_TRUE(nas_mac_delete(3, DEL_IFINDEX, STATIC_TYPE));
-    ASSERT_TRUE(nas_mac_get_test(STATIC_TYPE));
+    cout<<"VLAN Create"<<endl;
+    ASSERT_TRUE(nas_mac_vlan_create());
 
-
-    cout<<"DEL_VLAN"<<endl;
-    ASSERT_TRUE(nas_mac_test_3());
-    ASSERT_TRUE(nas_mac_get_test(STATIC_TYPE));
-    ASSERT_TRUE(nas_mac_delete(3, DEL_VLAN , STATIC_TYPE));
-    ASSERT_TRUE(nas_mac_get_test(true));
+    cout<<"MAC create"<<endl;
+    ASSERT_TRUE(nas_mac_create_test());
 
     cout<<"DEL_MAC"<<endl;
-    ASSERT_TRUE(nas_mac_test_3());
-    ASSERT_TRUE(nas_mac_get_test(true));
-    ASSERT_TRUE(nas_mac_delete(3, DEL_MAC , true));
-    ASSERT_TRUE(nas_mac_get_test(true));
+    ASSERT_TRUE(nas_mac_delete(DEL_MAC,1,"e101-001-0"));
+
+    cout<<"DEL_IFINDEX "<<endl;
+    ASSERT_TRUE(nas_mac_delete(DEL_IFINDEX,0,"e101-001-0"));
+
+    cout<<"DEL_VLAN"<<endl;
+    ASSERT_TRUE(nas_mac_delete(DEL_VLAN,1,NULL));
 
     cout<<"DEL_IFINDEX | VLAN"<<endl;
-    ASSERT_TRUE(nas_mac_test_3());
-    ASSERT_TRUE(nas_mac_get_test(true));
-    ASSERT_TRUE(nas_mac_delete(3, DEL_IFINDEX | DEL_VLAN , STATIC_TYPE));
-    ASSERT_TRUE(nas_mac_get_test(true));
-
-    cout<<"DEL_IFINDEX | MAC"<<endl;
-    ASSERT_TRUE(nas_mac_test_3());
-    ASSERT_TRUE(nas_mac_get_test(true));
-    ASSERT_TRUE(nas_mac_delete(3, DEL_IFINDEX | DEL_MAC , true));
-    ASSERT_TRUE(nas_mac_get_test(true));
-
-    cout<<"DEL_VLAN | MAC"<<endl;
-    ASSERT_TRUE(nas_mac_test_3());
-    ASSERT_TRUE(nas_mac_get_test(true));
-    ASSERT_TRUE(nas_mac_delete(3, DEL_VLAN | DEL_MAC , true));
-    ASSERT_TRUE(nas_mac_get_test(true));
-
-    cout<<"DEL_VLAN | MAC"<<endl;
-    ASSERT_TRUE(nas_mac_test_3());
-    ASSERT_TRUE(nas_mac_get_test(true));
-    ASSERT_TRUE(nas_mac_delete(3, DEL_VLAN | DEL_MAC|DEL_IFINDEX , true));
-    ASSERT_TRUE(nas_mac_get_test(true));
+    ASSERT_TRUE(nas_mac_delete(DEL_IFINDEX | DEL_VLAN,5,"e101-002-0"));
 
     cout<<"FLUSH ALL"<<endl;
-    ASSERT_TRUE(nas_mac_test_3());
-    ASSERT_TRUE(nas_mac_get_test(true));
-    ASSERT_TRUE(nas_mac_delete(3, DEL_ALL , true));
-    ASSERT_TRUE(nas_mac_delete(3, DEL_ALL , false));
-    ASSERT_TRUE(nas_mac_get_test(true));
-
-    cout<<"CREATE"<<endl;
-    ASSERT_TRUE(nas_mac_test_3());
-    ASSERT_TRUE(nas_mac_get_test(false));
+    ASSERT_TRUE(nas_mac_delete(DEL_ALL,0,NULL));
 
     cout<<"FLUSH LIST"<<endl;
+    ASSERT_TRUE(nas_mac_create_test());
     ASSERT_TRUE(nas_mac_flush_test(true,false));
     ASSERT_TRUE(nas_mac_flush_test(false,true));
     ASSERT_TRUE(nas_mac_flush_test(true,true));
@@ -766,6 +340,92 @@ TEST(cps_api_events,mac_test) {
     ASSERT_TRUE(nas_mac_auto_flush_management(false));
     ASSERT_TRUE(nas_mac_auto_flush_management(true));
 
+    cout<<"Bulk Flush Test"<<endl;
+    ASSERT_TRUE(nas_mac_bulk_flush_test());
+
+}
+
+static void mac_dump_flush_obj(cps_api_object_t obj, const cps_api_object_it_t & it){
+     cps_api_object_it_t it_lvl_1 = it;
+
+     for (cps_api_object_it_inside (&it_lvl_1); cps_api_object_it_valid (&it_lvl_1);
+             cps_api_object_it_next (&it_lvl_1)) {
+
+         cps_api_object_it_t it_lvl_2 = it_lvl_1;
+
+         for (cps_api_object_it_inside (&it_lvl_2); cps_api_object_it_valid (&it_lvl_2);
+                 cps_api_object_it_next (&it_lvl_2)) {
+
+             switch(cps_api_object_attr_id(it_lvl_2.attr)){
+             case BASE_MAC_FLUSH_EVENT_FILTER_MEMBER_IFINDEX:
+                 std::cout<<"Member port index "<<cps_api_object_attr_data_u32(it_lvl_2.attr)<<std::endl;
+                 break;
+
+             case BASE_MAC_FLUSH_EVENT_FILTER_IFINDEX:
+                 std::cout<<"Port index "<<cps_api_object_attr_data_u32(it_lvl_2.attr)<<std::endl;
+                 break;
+
+             case BASE_MAC_FLUSH_EVENT_FILTER_VLAN:
+                 std::cout<<"Vlan id "<<cps_api_object_attr_data_u16(it_lvl_2.attr)<<std::endl;
+                 break;
+
+             default:
+                 break;
+             }
+         }
+     }
+}
+
+static bool mac_event_cb(cps_api_object_t obj, void *param)
+{
+
+     cps_api_object_it_t it;
+     cps_api_object_it_begin(obj,&it);
+
+        for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
+            int id = (int) cps_api_object_attr_id(it.attr);
+            switch(id) {
+                case BASE_MAC_FLUSH_EVENT_FILTER:
+                    mac_dump_flush_obj(obj,it);
+                    break;
+                default:
+                    break;
+            }
+        }
+    return true;
+}
+
+TEST(std_nas_mac_events, mac_flush_events)
+{
+
+    cps_api_event_reg_t reg;
+    memset(&reg,0,sizeof(reg));
+
+    if (cps_api_event_service_init() != cps_api_ret_code_OK) {
+        printf("***ERROR*** cps_api_event_service_init() failed\n");
+        return ;
+    }
+
+    if (cps_api_event_thread_init() != cps_api_ret_code_OK) {
+        printf("***ERROR*** cps_api_event_thread_init() failed\n");
+        return;
+    }
+
+    cps_api_key_t key;
+
+    cps_api_key_from_attr_with_qual(&key,BASE_MAC_FLUSH_EVENT_OBJ ,
+            cps_api_qualifier_OBSERVED);
+
+    reg.number_of_objects = 1;
+    reg.objects = &key;
+
+    if (cps_api_event_thread_reg(&reg,mac_event_cb,NULL)!=cps_api_ret_code_OK) {
+        std::cout << " registration failure"<<std::endl;
+        return;
+    }
+
+    while(1);
+    // infinite loop
 }
 
 

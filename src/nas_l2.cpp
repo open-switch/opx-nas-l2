@@ -33,14 +33,13 @@
 #define NUM_L2_CPS_API_THREAD 1
 
 static cps_api_operation_handle_t handle;
-
+static cps_api_operation_handle_t stp_handle;
+static cps_api_operation_handle_t mac_handle;
 
 t_std_error (*nas_l2_init_functions[])(cps_api_operation_handle_t handle) = {
         nas_switch_mac_init,
         nas_mirroring_init,
         nas_sflow_init,
-        nas_stg_init,
-        nas_mac_init,
         nas_hash_init,
         nas_switch_cps_init,
         nas_switch_log_init,
@@ -51,11 +50,30 @@ t_std_error nas_l2_init(void) {
     if (cps_api_operation_subsystem_init(&handle,NUM_L2_CPS_API_THREAD)!=cps_api_ret_code_OK) {
         return STD_ERR(CPSNAS,FAIL,0);
     }
+
+    if (cps_api_operation_subsystem_init(&stp_handle,NUM_L2_CPS_API_THREAD)!=cps_api_ret_code_OK) {
+        return STD_ERR(CPSNAS,FAIL,0);
+    }
+
+    if (cps_api_operation_subsystem_init(&mac_handle,NUM_L2_CPS_API_THREAD)!=cps_api_ret_code_OK) {
+        return STD_ERR(CPSNAS,FAIL,0);
+    }
+
+    t_std_error rc;
     size_t ix = 0;
     size_t mx = sizeof(nas_l2_init_functions)/sizeof(*nas_l2_init_functions);
     for ( ; ix < mx ; ++ix ) {
-        t_std_error rc = nas_l2_init_functions[ix](handle);
+        rc = nas_l2_init_functions[ix](handle);
         if (rc!=STD_ERR_OK) return rc;
     }
+
+    if((rc = nas_stg_init(stp_handle)) != STD_ERR_OK){
+        return rc;
+    }
+
+    if((rc = nas_mac_init(mac_handle)) != STD_ERR_OK){
+        return rc;
+    }
+
     return STD_ERR_OK;
 }

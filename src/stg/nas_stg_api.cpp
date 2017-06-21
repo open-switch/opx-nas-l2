@@ -301,14 +301,14 @@ static bool nas_stg_update_os_stp_state(hal_ifindex_t intfindex,
         return true;
     }
 
-    cps_api_object_t obj = cps_api_object_create();
+    cps_api_object_guard og(cps_api_object_create());
 
-    if (obj == NULL) {
+    if (og.get()==nullptr) {
         NAS_STG_LOG(ERR,"Failed to create a new object");
         return false;
     }
 
-    cps_api_object_attr_add_u32(obj, BASE_STG_ENTRY_INTF_IF_INDEX_IFINDEX, intfindex);
+    cps_api_object_attr_add_u32(og.get(), BASE_STG_ENTRY_INTF_IF_INDEX_IFINDEX, intfindex);
 
     /* If state is blocking then pass the disabled state to kernel as kernel
        puts the state in forwarding after putting the state in blocking */
@@ -320,9 +320,9 @@ static bool nas_stg_update_os_stp_state(hal_ifindex_t intfindex,
         NAS_STG_LOG(ERR,"Invalid STP State %d to update os",state);
         return false;
     }
-    cps_api_object_attr_add_u32(obj, BASE_STG_ENTRY_INTF_STATE, it->second);
+    cps_api_object_attr_add_u32(og.get(), BASE_STG_ENTRY_INTF_STATE, it->second);
 
-    cps_api_object_attr_add_u32(obj, BASE_STG_ENTRY_VLAN, vlan_id);
+    cps_api_object_attr_add_u32(og.get(), BASE_STG_ENTRY_VLAN, vlan_id);
 
     interface_ctrl_t intf_ctrl;
     memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
@@ -331,7 +331,7 @@ static bool nas_stg_update_os_stp_state(hal_ifindex_t intfindex,
     intf_ctrl.if_index = intfindex;
 
     if(dn_hal_get_interface_info(&intf_ctrl) == STD_ERR_OK) {
-        cps_api_object_attr_add(obj, BASE_STG_ENTRY_INTF_IF_NAME, (const void *)intf_ctrl.if_name,
+        cps_api_object_attr_add(og.get(), BASE_STG_ENTRY_INTF_IF_NAME, (const void *)intf_ctrl.if_name,
                                 strlen(intf_ctrl.if_name)+1);
     }
 
@@ -339,7 +339,7 @@ static bool nas_stg_update_os_stp_state(hal_ifindex_t intfindex,
     /* Even if kernel STP State Update fails, continue
      * as it is not important enough to halt the system
      */
-    if (nl_int_update_stp_state(obj) != STD_ERR_OK) {
+    if (nl_int_update_stp_state(og.get()) != STD_ERR_OK) {
         NAS_STG_LOG(DEBUG, "Failed to updated kernel STP state to %d for interface index %d",
                 state, intfindex);
         return true;
@@ -469,13 +469,30 @@ static bool nas_stg_update_intf_info(nas_stg_entry_t * entry, cps_api_object_t o
         cps_api_object_attr_t stp_state_attr = cps_api_object_e_get(obj, ids, ids_len);
         ids[2] = BASE_STG_ENTRY_INTF_IF_INDEX_IFINDEX;
         cps_api_object_attr_t ifindex_attr = cps_api_object_e_get(obj, ids, ids_len);
+        ids[2] = BASE_STG_ENTRY_INTF_IF_NAME_IFNAME;
+        cps_api_object_attr_t ifname_attr = cps_api_object_e_get(obj, ids, ids_len);
 
-        if (ifindex_attr == NULL || stp_state_attr == NULL) {
+        if ((ifindex_attr == nullptr && ifname_attr == nullptr)  || stp_state_attr == nullptr) {
             NAS_STG_LOG(ERR,"Missing Necessary parameters for setting interface STP state");
             return false;
         }
 
-        hal_ifindex_t ifindex = cps_api_object_attr_data_u32(ifindex_attr);
+        hal_ifindex_t ifindex;
+        if(ifindex_attr){
+            ifindex = cps_api_object_attr_data_u32(ifindex_attr);
+        }else{
+            auto * ifname = (const char *)cps_api_object_attr_data_bin(ifname_attr);
+            interface_ctrl_t i;
+            memset(&i,0,sizeof(i));
+            strncpy(i.if_name,ifname,sizeof(i.if_name)-1);
+            i.q_type = HAL_INTF_INFO_FROM_IF_NAME;
+            if (dn_hal_get_interface_info(&i)!=STD_ERR_OK){
+                EV_LOGGING(NAS_L2, DEBUG, "NAS-STG","Can't get interface control information for %s",
+                            ifname);
+                    return false;
+                }
+            ifindex = i.if_index;
+        }
         BASE_STG_INTERFACE_STATE_t stp_state = (BASE_STG_INTERFACE_STATE_t)
                                                 cps_api_object_attr_data_u32(stp_state_attr);
 
@@ -1081,6 +1098,32 @@ t_std_error nas_stg_update_vlans(cps_api_object_t obj, nas_stg_id_t id,bool add)
 }
 
 
+static bool nas_stg_lag_handle_port_delete(hal_ifindex_t lag_index,nas_lag_port_list_t  & del_port_list){
+    for (auto tit = nas_stg_table.begin(); tit != nas_stg_table.end(); ++tit) {
+        nas_stg_entry_t & entry = tit->second;
+        auto lag_stp_it = entry.stp_states.find(lag_index);
+        interface_ctrl_t intf_ctrl;
+        if(lag_stp_it != entry.stp_states.end()){
+            for(auto del_it = del_port_list.begin(); del_it != del_port_list.end();++del_it){
+                memset(&intf_ctrl,0,sizeof(intf_ctrl));
+                if (!nas_stg_intf_to_port(*del_it, &intf_ctrl)) {
+                    return false;
+                }
+
+                if (ndi_stg_set_stp_port_state(intf_ctrl.npu_id,
+                            entry.npu_to_stg_map.find(intf_ctrl.npu_id)->second,
+                            intf_ctrl.port_id,BASE_STG_INTERFACE_STATE_BLOCKING) != STD_ERR_OK) {
+                    return false;
+                }
+
+                entry.stp_states[*del_it]=BASE_STG_INTERFACE_STATE_BLOCKING;
+            }
+        }
+    }
+    return true;
+}
+
+
 static bool nas_stg_lag_set(hal_ifindex_t lag_index, cps_api_object_t obj){
     auto it = nas_lag_map.find(lag_index);
     if(it == nas_lag_map.end()){
@@ -1120,6 +1163,14 @@ static bool nas_stg_lag_set(hal_ifindex_t lag_index, cps_api_object_t obj){
         }
     }
 
+    /*
+     * set the port state to blocking for ports which are removed from lag
+     */
+    if(port_list->size() > 0 )
+    {
+        nas_stg_lag_handle_port_delete(lag_index,*port_list);
+    }
+
     // Set the new member port list for the lag
     nas_lag_map[lag_index]=std::move(update_port_list);
 
@@ -1133,7 +1184,6 @@ static bool nas_stg_lag_set(hal_ifindex_t lag_index, cps_api_object_t obj){
             * Check the stp state if there is already a stp state associated with the LAG
             * then apply that state to all members of LAG
             */
-
 
            NAS_STG_LOG(INFO,"Setting stp state to %d for new lag member",lag_stp_it->second);
            if(!nas_update_stp_state(&entry,lag_index,lag_stp_it->second)){
@@ -1156,6 +1206,28 @@ t_std_error nas_stg_lag_update(hal_vlan_id_t id, bool create){
     return STD_ERR_OK;
 }
 
+
+bool nas_stg_lag_cleanup(hal_ifindex_t lag_index){
+
+    for (auto tit = nas_stg_table.begin(); tit != nas_stg_table.end(); ++tit) {
+        nas_stg_entry_t & entry = tit->second;
+        auto lag_stp_it = entry.stp_states.find(lag_index);
+
+        if(lag_stp_it != entry.stp_states.end()){
+
+            NAS_STG_LOG(INFO,"Setting stp state to %d for deleted lag member",
+                        BASE_STG_INTERFACE_STATE_BLOCKING);
+            if(!nas_update_stp_state(&entry,lag_index,BASE_STG_INTERFACE_STATE_BLOCKING)){
+                return false;
+            }
+
+            entry.stp_states.erase(lag_index);
+        }
+    }
+    return true;
+}
+
+
 t_std_error nas_stg_lag_update(hal_ifindex_t lag_index, cps_api_object_t obj){
     std_mutex_simple_lock_guard lock(&nas_stg_mutex);
     cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
@@ -1171,6 +1243,10 @@ t_std_error nas_stg_lag_update(hal_ifindex_t lag_index, cps_api_object_t obj){
     }
     else if (op == cps_api_oper_DELETE) {
         if (it != nas_lag_map.end()){
+            /*
+             * reset the port states to blocking when port-channel is deleted
+             */
+            nas_stg_lag_cleanup(lag_index);
             nas_lag_map.erase(it);
         }else{
             NAS_STG_LOG(ERR,"No Lag Interface Index %d exist in map",lag_index);

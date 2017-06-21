@@ -17,10 +17,12 @@ import sys
 import cps_object
 import nas_ut_framework as nas_ut
 import os
+import signal
+from subprocess import check_output
 
 
-log_level = {"debug": 1, "info": 2, "notice": 3,
-             "warning": 4, "error": 5, "critical": 6}
+log_level = {"debug": 0, "info": 1, "notice": 2,
+             "warning": 3, "error": 4, "critical": 5}
 
 mod_ids = {
     "UNSPECIFIED": 0, "SWITCH": 1, "PORT": 2, "FDB": 3, "VLAN": 4,
@@ -28,7 +30,9 @@ mod_ids = {
     "ROUTER_INTERFACE": 9, "NEIGHBOR": 10, "ACL": 11, "HOST_INTERFACE": 12,
     "MIRROR": 13, "SAMPLEPACKET": 14, "STP": 15, "LAG": 16, "POLICER": 17,
     "WRED": 18, "QOS_MAPS": 19, "QOS_QUEUE": 20, "SCHEDULER": 21,
-    "SCHEDULER_GROUP": 22, "ALL": 23,
+    "SCHEDULER_GROUP": 22, "BUFFERS":23, "HASH":24, "UDF":25, "TUNNEL":26,
+	"L2MC":27, "IPMC":28, "RPF_GROUP":29, "L2MC_GROUP":30, "IPMC_GROUP":31,
+	"MCAST_FDB":32, "FC_SWITCH":4097, "FC_PORT":4098, "ALL": 4099,
 }
 
 base_mod_ids = {
@@ -44,17 +48,22 @@ base_mod_ids = {
     "LAG": "SAI_LAG", "POLICER": "SAI_POLICER",
     "WRED": "SAI_WRED", "QOS_MAPS": "SAI_MAPS",
     "QOS_QUEUE": "SAI_QOS", "SCHEDULER": "SAI_SCHEDULER",
-    "SCHEDULER_GROUP": "SAI_SCHEDULER_GRP"
+    "SCHEDULER_GROUP": "SAI_SCHEDULER_GRP", "BUFFERS":"SAI_BUFFERS",
+	"HASH":"SAI_HASH", "UDF":"SAI_UDF", "TUNNEL":"SAI_TUNNEL",
+	"L2MC":"SAI_L2MC", "IPMC":"SAI_IPMC", "RPF_GROUP":"SAI_RPF_GROUP",
+	"L2MC_GROUP":"SAI_L2MC_GROUP", "IPMC_GROUP":"SAI_IPMC_GROUP",
+	"MCAST_FDB":"SAI_MCAST_FDB", "FC_SWITCH":"SAI_FC_SWITCH",
+	"FC_PORT":"SAI_FC_PORT"
 }
 
 
 def usage():
     print """
-nas_switch_log.py set [module_name] [level_name]
+os10-switch-log set [module_name] [level_name]
 - Set the given module name's logging level to
   given level_name\n
 
-eg. nas_switch_log.py set ALL debug
+eg. os10-switch-log set ALL debug
 """
     print "module_name\n"
     print mod_ids
@@ -81,16 +90,26 @@ def nas_diag_set(data_dict):
     print obj.get()
     nas_ut.get_cb_method("rpc")(obj)
 
+def get_pid(name):
+    return int(check_output(["pidof","-s",name]))
+
 if __name__ == "__main__":
     if len(sys.argv) != 4:
         usage()
-    id, level = parse_args(sys.argv[2], sys.argv[3])
-    nas_diag_set(
-        {"base-switch/set_log/input/subsystem-id": id,
-         "base-switch/set_log/input/level": level})
     if sys.argv[2] == "ALL":
         for key, val in base_mod_ids.items():
+            id, level = parse_args(key,sys.argv[3])
+            nas_diag_set(
+                {"base-switch/set_log/input/subsystem-id": id,
+                 "base-switch/set_log/input/level": level})
             os.system("/usr/bin/opx_logging_cli enable " + val)
     else:
+        id, level = parse_args(sys.argv[2], sys.argv[3])
+        nas_diag_set(
+            {"base-switch/set_log/input/subsystem-id": id,
+             "base-switch/set_log/input/level": level})
         os.system(
             "/usr/bin/opx_logging_cli enable " + base_mod_ids[sys.argv[2]])
+    pid = get_pid("base_nas")
+    os.kill(pid,signal.SIGUSR1)
+    print "log set for", sys.argv[2], "level",sys.argv[3]

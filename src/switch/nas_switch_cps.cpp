@@ -14,14 +14,15 @@
  * permissions and limitations under the License.
  */
 
-
 #include "nas_switch_cps.h"
 #include "nas_switch_mac.h"
 #include "dell-base-switch-element.h"
+#include "nas_sw_profile_api.h"
 
 #include "cps_class_map.h"
 #include "cps_api_object_key.h"
 #include "cps_api_operation.h"
+#include "cps_api_db_interface.h"
 #include "event_log.h"
 
 #include "nas_ndi_switch.h"
@@ -30,7 +31,6 @@
 #include <vector>
 
 
-static cps_api_key_t _sws_ent_key;
 static const unsigned int nas_def_counter_refresh_interval = 5;
 
 const npu_id_t * npu_list_from_switch(BASE_CMN_LOGICAL_SWITCH_ID_t sw) {
@@ -83,6 +83,75 @@ static bool _is_switch_obj_empty (cps_api_object_t obj)
 
     return ret;
 }
+static void _fill_switch_uft_info(cps_api_object_t obj,
+                                            uint32_t in_mode,
+                                            uint32_t l2_size,
+                                            uint32_t l3_size,
+                                            uint32_t l3_host_size)
+{
+    cps_api_attr_id_t uft_ids[3] = {BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE_INFO,
+                                    0,
+                                    BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE_INFO_MODE};
+    const int ids_len = sizeof (uft_ids)/sizeof(uft_ids[0]);
+    size_t mode = 0;
+
+    if (in_mode != 0)
+    {
+        l2_size = l3_size = l3_host_size = 0;
+        if (nas_sw_profile_uft_info_get(in_mode, &l2_size,
+                &l3_size, &l3_host_size) == STD_ERR_OK)
+        {
+            uft_ids[2] = BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE_INFO_MODE;
+            cps_api_object_e_add(obj, uft_ids, ids_len, cps_api_object_ATTR_T_U32,
+                                    &in_mode, sizeof(in_mode));
+
+
+            uft_ids[2] = BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE_INFO_L2_MAC_TABLE_SIZE;
+            cps_api_object_e_add(obj, uft_ids, ids_len, cps_api_object_ATTR_T_U32,
+                                    &l2_size, sizeof(l2_size));
+
+
+            uft_ids[2] = BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE_INFO_L3_ROUTE_TABLE_SIZE;
+            cps_api_object_e_add(obj, uft_ids, ids_len, cps_api_object_ATTR_T_U32,
+                                    &l3_size, sizeof(l3_size));
+
+            uft_ids[2] = BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE_INFO_HOST_TABLE_SIZE;
+            cps_api_object_e_add(obj, uft_ids, ids_len, cps_api_object_ATTR_T_U32,
+                                    &l3_host_size, sizeof(l3_host_size));
+        }
+    }
+    else
+    {
+        for (mode = BASE_SWITCH_UFT_MODE_MIN;
+                mode <= BASE_SWITCH_UFT_MODE_MAX; mode++)
+        {
+            l2_size = l3_size = l3_host_size = 0;
+            if (nas_sw_profile_uft_info_get(mode, &l2_size,
+                &l3_size, &l3_host_size) == STD_ERR_OK)
+            {
+                 uft_ids[2] = BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE_INFO_MODE;
+                 cps_api_object_e_add(obj, uft_ids, ids_len, cps_api_object_ATTR_T_U32,
+                                         &mode, sizeof(uint32_t));
+
+                 uft_ids[2] = BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE_INFO_L2_MAC_TABLE_SIZE;
+                 cps_api_object_e_add(obj, uft_ids, ids_len, cps_api_object_ATTR_T_U32,
+                                         &l2_size, sizeof(l2_size));
+
+
+                 uft_ids[2] = BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE_INFO_L3_ROUTE_TABLE_SIZE;
+                 cps_api_object_e_add(obj, uft_ids, ids_len, cps_api_object_ATTR_T_U32,
+                                         &l3_size, sizeof(l3_size));
+
+                 uft_ids[2] = BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE_INFO_HOST_TABLE_SIZE;
+                 cps_api_object_e_add(obj, uft_ids, ids_len, cps_api_object_ATTR_T_U32,
+                                         &l3_host_size, sizeof(l3_host_size));
+            }
+            ++uft_ids[1];
+        }
+    }
+
+    return;
+}
 
 static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
                                  BASE_CMN_LOGICAL_SWITCH_ID_t sw) {
@@ -91,9 +160,16 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
     cps_api_attr_id_t      attr;
     std::vector <uint32_t> attrlist;
     const npu_id_t * npus = npu_list_from_switch(sw);
+    char profile[NAS_CMN_PROFILE_NAME_SIZE + 1] = {0};
+    uint32_t l2_size, l3_size, l3_host_size, in_uft_mode;
+
+    l2_size = l3_size = l3_host_size = 0, in_uft_mode = 0;
+
     STD_ASSERT(npus!=NULL);
 
     cps_api_object_attr_add_u32(obj,BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_ID,sw);
+
+    cps_api_qualifier_t qualifier = cps_api_key_get_qual(cps_api_object_key(obj));
 
     is_empty = _is_switch_obj_empty(filter);
 
@@ -106,12 +182,17 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
     } else {
         cps_api_object_it_begin(filter, &it);
 
+        /* if input mode is passed get uft info only for that mode */
+        cps_api_object_attr_t uft_mode = cps_api_get_key_data(filter,
+                        BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE_INFO_MODE);
+        if (uft_mode) {
+            in_uft_mode = cps_api_object_attr_data_u32(uft_mode);
+        }
         while (cps_api_object_it_valid(&it)) {
             attr = cps_api_object_attr_id (it.attr);
 
             if (attr != BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_ID)
                 attrlist.push_back(attr);
-
             cps_api_object_it_next (&it);
         }
     }
@@ -121,13 +202,14 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
 
     while (attr_it != attrlist.end()) {
 
+        memset(&param, 0, sizeof(nas_ndi_switch_param_t));
+
         switch (*attr_it) {
 
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_MODE:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_LAG_HASH_ALGORITHM:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_BRIDGE_TABLE_SIZE:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECMP_HASH_ALGORITHM:
-            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_ECMP_ENTRY_PER_GROUP:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAC_AGE_TIMER:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ACL_TABLE_MIN_PRIORITY:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ACL_TABLE_MAX_PRIORITY:
@@ -144,7 +226,8 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_COUNTER_REFRESH_INTERVAL:
 
                 if (ndi_switch_get_attribute(*npus,
-                            (BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t)*attr_it, &param)==cps_api_ret_code_OK) {
+                            (BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t)*attr_it,
+                            &param)==cps_api_ret_code_OK) {
                     cps_api_object_attr_add_u32(obj,*attr_it, param.u32);
                 }
                 break;
@@ -158,9 +241,88 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
                 break;
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_TEMPERATURE:
                 if (ndi_switch_get_attribute(*npus,
-                            (BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t) *attr_it, &param)==cps_api_ret_code_OK) {
+                            (BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t) *attr_it,
+                            &param)==cps_api_ret_code_OK) {
                     cps_api_object_attr_add(obj, *attr_it,&param.s32,sizeof(param.s32));
                 }
+                break;
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_ECMP_ENTRY_PER_GROUP:
+                if (qualifier == cps_api_qualifier_OBSERVED)
+                {
+                    if (nas_sw_profile_cur_max_ecmp_per_grp_get(&param.u32)
+                            == STD_ERR_OK)
+                    {
+                        cps_api_object_attr_add_u32(obj, *attr_it,param.u32);
+                    }
+                }
+                else
+                {
+                    if (nas_sw_profile_conf_max_ecmp_per_grp_get(&param.u32)
+                            == STD_ERR_OK)
+                    {
+                        cps_api_object_attr_add_u32(obj, *attr_it,param.u32);
+                    }
+                }
+                break;
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_DEFAULT_PROFILE:
+                if (nas_sw_profile_default_profile_get(0, profile, sizeof(profile))
+                        == STD_ERR_OK)
+                {
+                    cps_api_object_attr_add(obj, *attr_it, profile, sizeof(profile));
+                }
+                break;
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SUPPORTED_PROFILES:
+
+                nas_sw_profile_supported_profiles_get(0, obj);
+
+                break;
+
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_PROFILE:
+                if (qualifier == cps_api_qualifier_OBSERVED)
+                {
+                    if (nas_sw_profile_current_profile_get(0, profile, sizeof(profile))
+                            == STD_ERR_OK)
+                    {
+                        cps_api_object_attr_add(obj, *attr_it,profile, sizeof(profile));
+                    }
+                }
+                else
+                {
+                    if (nas_sw_profile_conf_profile_get(0, profile, sizeof(profile))
+                            == STD_ERR_OK)
+                    {
+                        cps_api_object_attr_add(obj, *attr_it,profile, sizeof(profile));
+                    }
+                }
+                break;
+
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE:
+                if (qualifier == cps_api_qualifier_OBSERVED)
+                {
+                    if (nas_sw_profile_current_uft_get(&param.u32)
+                            == STD_ERR_OK)
+                    {
+                        cps_api_object_attr_add_u32(obj, *attr_it,param.u32);
+                    }
+                }
+                else
+                {
+                    if (nas_sw_profile_conf_uft_get(&param.u32)
+                            == STD_ERR_OK)
+                    {
+                        cps_api_object_attr_add_u32(obj, *attr_it,param.u32);
+                    }
+                }
+                break;
+
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE_INFO:
+                if (qualifier == cps_api_qualifier_TARGET)
+                {
+                    /* For target return configured mode info */
+                    nas_sw_profile_conf_uft_get(&in_uft_mode);
+                }
+                _fill_switch_uft_info(obj, in_uft_mode, l2_size,
+                                            l3_size, l3_host_size);
                 break;
             default:
                 break;
@@ -192,6 +354,32 @@ static cps_api_return_code_t _switch_get (void * context, cps_api_get_params_t *
     return cps_api_ret_code_OK;
 }
 
+static cps_api_return_code_t _switch_observed_get (void * context,
+                                        cps_api_get_params_t * param,
+                                        size_t key_ix) {
+    cps_api_object_t filt = cps_api_object_list_get(param->filters,key_ix);
+
+    cps_api_object_attr_t _switch = cps_api_get_key_data(filt,
+                                    BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_ID);
+
+    size_t ix = 0;
+    size_t mx = number_of_switches();
+    for ( ; ix < mx ; ++ix ) {
+        if (_switch!=NULL && cps_api_object_attr_data_u32(_switch)!=ix) continue;
+        if (npu_list_from_switch_len((BASE_CMN_LOGICAL_SWITCH_ID_t)ix) ==0 ) continue;
+
+        cps_api_object_t obj = create_obj_on_list(param->list,
+                                BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY,
+                                cps_api_qualifier_OBSERVED);
+        if(obj==NULL) return cps_api_ret_code_ERR;
+
+        _fill_obj_for_switch(obj, filt, (BASE_CMN_LOGICAL_SWITCH_ID_t)ix);
+
+    }
+
+    return cps_api_ret_code_OK;
+}
+
 static cps_api_return_code_t _set_generic_u32(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t attr,
         npu_id_t npu, cps_api_object_t obj) {
 
@@ -212,15 +400,84 @@ static cps_api_return_code_t _set_generic_mac(BASE_SWITCH_SWITCHING_ENTITIES_SWI
     return ndi_switch_set_attribute(npu,attr,&param)==STD_ERR_OK ? cps_api_ret_code_OK : cps_api_ret_code_ERR;
 }
 
+/* Currently this value will be applied only on reboot, this is sent to NDI on next boot init */
+static cps_api_return_code_t nas_set_uft_mode(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t attr,
+        npu_id_t npu, cps_api_object_t obj) {
+
+    uint32_t uft_mode = 0;
+    t_std_error ret;
+
+    cps_api_operation_types_t op_type = cps_api_object_type_operation(cps_api_object_key(obj));
+    cps_api_object_attr_t _attr = cps_api_object_attr_get(obj,attr);
+
+    if (_attr==NULL) return cps_api_ret_code_ERR;
+    uft_mode = cps_api_object_attr_data_u32(_attr);
+
+    ret = nas_sw_profile_conf_uft_set(uft_mode, op_type);
+    if (ret != STD_ERR_OK)
+    {
+        return cps_api_ret_code_ERR;
+    }
+    return cps_api_ret_code_OK;
+}
+
+/* Currently this value will be applied only on reboot, this is sent to NDI on next boot init */
+static cps_api_return_code_t nas_set_max_ecmp_per_grp(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t attr,
+        npu_id_t npu, cps_api_object_t obj) {
+
+    uint32_t max_ecmp_per_grp = 0;
+    t_std_error ret;
+
+    cps_api_operation_types_t op_type = cps_api_object_type_operation(cps_api_object_key(obj));
+    cps_api_object_attr_t _attr = cps_api_object_attr_get(obj,attr);
+
+    if (_attr==NULL) return cps_api_ret_code_ERR;
+    max_ecmp_per_grp = cps_api_object_attr_data_u32(_attr);
+
+    ret = nas_sw_profile_conf_max_ecmp_per_grp_set(max_ecmp_per_grp, op_type);
+    if (ret != STD_ERR_OK)
+    {
+        return cps_api_ret_code_ERR;
+    }
+    return cps_api_ret_code_OK;
+}
+/* Currently this value will be applied only on reboot, this is sent to NDI on next boot init */
+static cps_api_return_code_t nas_set_profile(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t attr,
+        npu_id_t npu, cps_api_object_t obj) {
+
+    char *profile = NULL ;
+    t_std_error ret;
+
+    cps_api_operation_types_t op_type = cps_api_object_type_operation(cps_api_object_key(obj));
+
+    cps_api_object_attr_t _attr = cps_api_object_attr_get(obj,attr);
+    if (_attr==NULL) return cps_api_ret_code_ERR;
+    profile = (char *)cps_api_object_attr_data_bin(_attr);
+
+    if (profile == NULL)
+    {
+        return cps_api_ret_code_ERR;
+    }
+
+    ret = nas_sw_profile_conf_profile_set(0, profile, op_type);
+    if (ret != STD_ERR_OK)
+    {
+        return cps_api_ret_code_ERR;
+    }
+    return cps_api_ret_code_OK;
+}
+
 static const std::unordered_map<cps_api_attr_id_t,
     cps_api_return_code_t (*)(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t, npu_id_t, cps_api_object_t)> _set_attr_handlers = {
         { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAC_AGE_TIMER, _set_generic_u32},
         { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_MODE, _set_generic_u32},
         { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_LAG_HASH_ALGORITHM, _set_generic_u32 },
         { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECMP_HASH_ALGORITHM, _set_generic_u32},
-        { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_ECMP_ENTRY_PER_GROUP, _set_generic_u32 },
+        { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_ECMP_ENTRY_PER_GROUP, nas_set_max_ecmp_per_grp },
         { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_COUNTER_REFRESH_INTERVAL,_set_generic_u32},
         { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_DEFAULT_MAC_ADDRESS, _set_generic_mac },
+        { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_PROFILE, nas_set_profile },
+        { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE, nas_set_uft_mode },
 };
 
 
@@ -290,6 +547,20 @@ static cps_api_return_code_t _switch_set(void * context,
         EV_LOGGING(NAS_L2,ERR,"HAL-INTF-EVENT","Failed to send change event");
     }
 
+    /* There are some values in the switch elements which needs to be restored
+        after reboot, so updated the DB here */
+    cps_api_key_set(cps_api_object_key(obj),CPS_OBJ_KEY_INST_POS,
+                                cps_api_qualifier_RUNNING_CONFIG);
+
+    cps_api_return_code_t ret =  cps_api_db_commit_one(cps_api_oper_SET, obj,
+                                                        NULL, false);
+    if (ret != cps_api_ret_code_OK)
+    {
+        EV_LOGGING(NAS_L2, NOTICE, "NAS-L2-SWITCH","Failed to write switch"
+                                    " elements to DB op_type");
+        return cps_api_ret_code_ERR;
+    }
+
     cps_api_key_set(cps_api_object_key(obj),CPS_OBJ_KEY_INST_POS,cps_api_qualifier_TARGET);
 
     return cps_api_ret_code_OK;
@@ -301,19 +572,41 @@ static t_std_error nas_switch_cps_init_entities(cps_api_operation_handle_t handl
     memset(&f,0,sizeof(f));
 
 
-    if (!cps_api_key_from_attr_with_qual(&_sws_ent_key,BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY,cps_api_qualifier_TARGET)) {
+    if (!cps_api_key_from_attr_with_qual(&f.key,
+                        BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY,
+                        cps_api_qualifier_TARGET)) {
         EV_LOGGING(NAS_L2,ERR,"NAS-L2-SWITCH","Could not translate %d to key %s",
-                            (int)(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY),cps_api_key_print(&f.key,buff,sizeof(buff)-1));
-        return STD_ERR(INTERFACE,FAIL,0);
+                            (int)(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY),
+                            cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+        return STD_ERR(CPSNAS,FAIL,0);
     }
-
-    cps_api_key_copy(&f.key,&_sws_ent_key);
 
     EV_LOGGING(NAS_L2,INFO,"NAS-L2-SWITCH","Registering for %s",
                         cps_api_key_print(&f.key,buff,sizeof(buff)-1));
     f.handle = handle;
     f._read_function = _switch_get;
     f._write_function = _switch_set;
+    if (cps_api_register(&f)!=cps_api_ret_code_OK) {
+        return STD_ERR(CPSNAS,FAIL,0);
+    }
+
+    /* Register for Observed SWITCH elements */
+    memset(&f,0,sizeof(f));
+
+    if (!cps_api_key_from_attr_with_qual(&f.key,
+                            BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY,
+                            cps_api_qualifier_OBSERVED)) {
+        EV_LOGGING(NAS_L2,ERR,"NAS-L2-SWITCH","Could not translate %d to key %s",
+                            (int)(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY),
+                            cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+        return STD_ERR(CPSNAS,FAIL,0);
+    }
+
+    EV_LOGGING(NAS_L2,INFO,"NAS-L2-SWITCH","Registering for %s",
+                        cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+    f.handle = handle;
+    f._read_function = _switch_observed_get;
+    f._write_function = NULL;
     if (cps_api_register(&f)!=cps_api_ret_code_OK) {
         return STD_ERR(CPSNAS,FAIL,0);
     }
@@ -372,5 +665,6 @@ t_std_error nas_switch_cps_init(cps_api_operation_handle_t handle) {
     if (rc==STD_ERR_OK) {
         rc = nas_switch_cps_init_entities(handle);
     }
+
     return rc;
 }

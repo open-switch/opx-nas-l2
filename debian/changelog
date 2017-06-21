@@ -1,3 +1,23 @@
+opx-nas-l2 (1.12.0) unstable; urgency=medium
+
+  * Update: Publish flush all mac event
+  * Update: Publish mac event for every 1000 messages
+  * Update: Publish flush for port/vlan flush
+  * Update: Set the port state to blocking when port is deleted from LAG, or LAG is deleted
+  * Update: Update/remove mac in kernel when mac is moved/aged in npu
+  * Update: Implemented mac get from ndi
+  * Update: Updated the sflow script to accept ifname and ifindex for 
+  * Update: Miscellaneous performance improvements and optimizations
+  * Feature: Added infra support from BASE for switch profile, uft mode, max ecmp
+            based on "dell-switch-element.yang"
+  * Feature: Use seperate event handles for mac and stp
+  * Feature: Added mac move handling
+            disable and also disable sampling using enable command with sampling rate of 0
+  * Bugfix: Miscellaneous bug fixes
+  * Cleanup: Miscellaneous cleanup
+ 
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Tue, 20 Jun 2017 14:38:23 -0800
+
 opx-nas-l2 (1.0.1) unstable; urgency=medium
 
   * Initial release.
