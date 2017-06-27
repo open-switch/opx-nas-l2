@@ -8,4 +8,4 @@ This repository contains the Layer 2 (L2) component of the network abstraction s
 
 See [Architecture](https://github.com/open-switch/opx-docs/wiki/Architecture) for information on the nas-l2 module.
 
-(c) 2017 Dell
+(c) 2017 Dell EMC
