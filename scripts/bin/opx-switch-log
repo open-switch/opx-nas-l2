@@ -59,11 +59,11 @@ base_mod_ids = {
 
 def usage():
     print """
-os10-switch-log set [module_name] [level_name]
+opx-switch-log set [module_name] [level_name]
 - Set the given module name's logging level to
   given level_name\n
 
-eg. os10-switch-log set ALL debug
+eg. opx-switch-log set ALL debug
 """
     print "module_name\n"
     print mod_ids
