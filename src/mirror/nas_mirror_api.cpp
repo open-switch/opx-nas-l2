@@ -47,13 +47,13 @@
 #define MAX_MIRROR_SESSION 512
 
 // Mirror Entry table
-static nas_mirror_table_t  nas_mirror_table;
+static auto  nas_mirror_table = new nas_mirror_table_t;
 
 // Mirror IDs Map
 static nas::id_generator_t nas_mirror_ids(MAX_MIRROR_SESSION);
 
 static std_mutex_lock_create_static_init_fast(nas_mirror_mutex);
-static std::unordered_set<hal_ifindex_t> dst_intf_set;
+static auto dst_intf_set = new std::unordered_set<hal_ifindex_t> ;
 
 static inline unsigned int nas_mirror_get_next_id(){
     return (unsigned int)nas_mirror_ids.alloc_id();
@@ -424,6 +424,35 @@ static bool nas_mirror_fill_erspan_attr(cps_api_object_t obj, nas_mirror_entry *
             entry->set_src_mac(cps_api_object_attr_data_bin(it.attr));
             attrs.add(BASE_MIRROR_ENTRY_SOURCE_MAC);
             break;
+
+        case BASE_MIRROR_ENTRY_TTL:
+            if( attrs.contains(BASE_MIRROR_ENTRY_TTL)){
+                NAS_MIRROR_LOG(ERR,"Multiple TTL value passed for creating ERSPAN Mirroring session");
+                return false;
+            }
+            entry->set_ttl(cps_api_object_attr_data_uint(it.attr));
+            attrs.add(BASE_MIRROR_ENTRY_TTL);
+            break;
+
+        case BASE_MIRROR_ENTRY_DSCP:
+            if( attrs.contains(BASE_MIRROR_ENTRY_DSCP)){
+                NAS_MIRROR_LOG(ERR,"Multiple DSCP value passed for creating ERSPAN Mirroring session");
+                return false;
+            }
+            entry->set_dscp(cps_api_object_attr_data_uint(it.attr));
+            attrs.add(BASE_MIRROR_ENTRY_DSCP);
+            break;
+
+        case BASE_MIRROR_ENTRY_GRE_PROTOCOL_TYPE:
+            if( attrs.contains(BASE_MIRROR_ENTRY_GRE_PROTOCOL_TYPE)){
+                NAS_MIRROR_LOG(ERR,"Multiple GRE protocol valuepassed for creating ERSPAN Mirroring session");
+                return false;
+            }
+            entry->set_gre_prot_type(cps_api_object_attr_data_u16(it.attr));
+            attrs.add(BASE_MIRROR_ENTRY_GRE_PROTOCOL_TYPE);
+            break;
+
+
         }
     }
 
@@ -559,8 +588,8 @@ t_std_error nas_mirror_create_session(cps_api_object_t obj) {
 
     bool invalid = false;
     for(auto it : intf_map){
-        auto dst_it = dst_intf_set.find(it.first);
-        if(dst_it != dst_intf_set.end() ){
+        auto dst_it = dst_intf_set->find(it.first);
+        if(dst_it != dst_intf_set->end() ){
             invalid = true;
             break;
         }
@@ -588,7 +617,7 @@ t_std_error nas_mirror_create_session(cps_api_object_t obj) {
         return STD_ERR(MIRROR,FAIL,0);
     }
 
-    dst_intf_set.insert(entry.get_dst_intf());
+    dst_intf_set->insert(entry.get_dst_intf());
 
 
     nas_mirror_id_t id = nas_mirror_get_next_id();
@@ -601,7 +630,7 @@ t_std_error nas_mirror_create_session(cps_api_object_t obj) {
     nas::ndi_obj_id_table_cps_serialize (mirror_opaque_data_table, obj, attr_id_list,
                                                 sizeof(attr_id_list)/sizeof(attr_id_list[0]));
     NAS_MIRROR_LOG(DEBUG,"Created New Mirror Session with id %d",entry.get_id());
-    nas_mirror_table.insert(nas_mirror_table_pair(entry.get_id(),std::move(entry)));
+    nas_mirror_table->insert(nas_mirror_table_pair(entry.get_id(),std::move(entry)));
 
     return STD_ERR_OK;
 }
@@ -610,9 +639,9 @@ t_std_error nas_mirror_create_session(cps_api_object_t obj) {
 t_std_error nas_mirror_delete_session(cps_api_object_t obj,nas_mirror_id_t id) {
 
     std_mutex_simple_lock_guard lock(&nas_mirror_mutex);
-    nas_mirror_table_it it = nas_mirror_table.find(id);
+    nas_mirror_table_it it = nas_mirror_table->find(id);
 
-    if(it == nas_mirror_table.end()){
+    if(it == nas_mirror_table->end()){
         NAS_MIRROR_LOG(ERR,"No Mirror oid %d exist",(int)id);
         return STD_ERR(MIRROR,NEXIST,0);
     }
@@ -629,18 +658,18 @@ t_std_error nas_mirror_delete_session(cps_api_object_t obj,nas_mirror_id_t id) {
     }
 
     NAS_MIRROR_LOG(DEBUG,"Deleted Mirror Session Id %d",entry.get_id());
-    dst_intf_set.erase(entry.get_dst_intf());
+    dst_intf_set->erase(entry.get_dst_intf());
     nas_mirror_release_id(entry.get_id());
-    nas_mirror_table.erase(it);
+    nas_mirror_table->erase(it);
     return STD_ERR_OK;
 }
 
 
 t_std_error nas_mirror_set_session(cps_api_object_t obj,nas_mirror_id_t id){
 
-    nas_mirror_table_it it = nas_mirror_table.find(id);
+    nas_mirror_table_it it = nas_mirror_table->find(id);
     NAS_MIRROR_LOG(DEBUG,"updating mirror session %d",(int)id);
-    if(it == nas_mirror_table.end()){
+    if(it == nas_mirror_table->end()){
         NAS_MIRROR_LOG(ERR,"No Mirror id %d exist for updating mirror session",(int)id);
         return STD_ERR(MIRROR,NEXIST,0);
     }
@@ -694,11 +723,14 @@ static void nas_mirror_fill_object(cps_api_object_t obj, nas_mirror_table_it it)
     }
 
     if(entry.get_mode() == BASE_MIRROR_MODE_ERSPAN){
-        cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_SOURCE_IP,entry.get_dst_ip()->u.v4_addr);
-        cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DESTINATION_IP,entry.get_src_ip()->u.v4_addr);
+        cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_SOURCE_IP,entry.get_src_ip()->u.v4_addr);
+        cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DESTINATION_IP,entry.get_dst_ip()->u.v4_addr);
         cps_api_object_attr_add(obj,BASE_MIRROR_ENTRY_SOURCE_MAC,(void *)entry.get_src_mac(),sizeof(hal_mac_addr_t));
         cps_api_object_attr_add(obj,BASE_MIRROR_ENTRY_DEST_MAC,(void *)entry.get_dst_mac(),sizeof(hal_mac_addr_t));
         cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_ERSPAN_VLAN_ID,entry.get_vlan_id());
+        cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_TTL,entry.get_ttl());
+        cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DSCP,entry.get_dscp());
+        cps_api_object_attr_add_u16(obj,BASE_MIRROR_ENTRY_GRE_PROTOCOL_TYPE,entry.get_gre_prot_type());
     }
 }
 
@@ -706,9 +738,9 @@ static void nas_mirror_fill_object(cps_api_object_t obj, nas_mirror_table_it it)
 t_std_error nas_mirror_get_all_info(cps_api_object_list_t list){
 
     std_mutex_simple_lock_guard lock(&nas_mirror_mutex);
-    auto it = nas_mirror_table.begin();
+    auto it = nas_mirror_table->begin();
 
-    for ( ; it != nas_mirror_table.end() ; ++it){
+    for ( ; it != nas_mirror_table->end() ; ++it){
         cps_api_object_t obj=cps_api_object_create();
 
         if (obj==NULL) {
@@ -732,9 +764,9 @@ t_std_error nas_mirror_get_session_info(cps_api_object_list_t list, nas_mirror_i
 
     std_mutex_simple_lock_guard lock(&nas_mirror_mutex);
 
-    auto it = nas_mirror_table.find(id);
+    auto it = nas_mirror_table->find(id);
 
-    if(it == nas_mirror_table.end()){
+    if(it == nas_mirror_table->end()){
         NAS_MIRROR_LOG(ERR,"No NAS Mirror session with Id %d exist",(int)id);
         return STD_ERR(MIRROR,NEXIST,0);
     }

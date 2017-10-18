@@ -52,25 +52,25 @@ static nas::id_generator_t nas_stg_ids(MAX_STG_ID);
 static std_mutex_lock_create_static_init_fast(nas_stg_mutex);
 
 // Table to maintain STG Entries
-static nas_stg_table_t nas_stg_table;
+static auto nas_stg_table = new nas_stg_table_t;
 
 // Bridge to STG Id map
-static nas_br_to_stg_map_t bridge_to_stg_map;
+static auto bridge_to_stg_map = new nas_br_to_stg_map_t;
 
 // Bridge to VLAN Id map
-static nas_br_to_vlan_map_t bridge_to_vlan_map;
+static auto bridge_to_vlan_map = *new nas_br_to_vlan_map_t;
 
 // VLAN to STG Map
-static nas_vlan_to_stg_map_t vlan_to_stg_map;
+static auto vlan_to_stg_map = *new nas_vlan_to_stg_map_t;
 
 // Switch to NPU Ids map
-static nas_stg_switch_npu_map_t switch_to_npu_map;
+static auto switch_to_npu_map = new nas_stg_switch_npu_map_t;
 
 // Switch Id to default STG Id map
-static nas_stg_switch_defult_stg_map_t switch_to_default_stg_map;
+static auto switch_to_default_stg_map = new nas_stg_switch_defult_stg_map_t;
 
 // Map which maintains lag and its member ports
-static nas_stg_lag_map_t nas_lag_map;
+static auto nas_lag_map = new nas_stg_lag_map_t;
 
 BASE_STG_INTERFACE_STATE_t default_stg_state = BASE_STG_INTERFACE_STATE_FORWARDING;
 
@@ -82,8 +82,8 @@ typedef enum{
     OS_STATE_BLOCKING,
 }os_stp_state_t;
 
-static std::unordered_map<BASE_STG_INTERFACE_STATE_t,os_stp_state_t,std::hash<int>>
-to_os_stp_state = {
+static auto
+to_os_stp_state = new std::unordered_map<BASE_STG_INTERFACE_STATE_t,os_stp_state_t,std::hash<int>>{
     { BASE_STG_INTERFACE_STATE_DISABLED,OS_STATE_DISABLED } ,
     { BASE_STG_INTERFACE_STATE_LISTENING,OS_STATE_LISTENING },
     { BASE_STG_INTERFACE_STATE_LEARNING,OS_STATE_LEARNING } ,
@@ -91,14 +91,15 @@ to_os_stp_state = {
     { BASE_STG_INTERFACE_STATE_BLOCKING,OS_STATE_BLOCKING }
 };
 
-static std::unordered_map<os_stp_state_t,BASE_STG_INTERFACE_STATE_t,std::hash<int>>
-from_os_stp_state = {
-   { OS_STATE_DISABLED,BASE_STG_INTERFACE_STATE_DISABLED },
-   { OS_STATE_LISTENING,BASE_STG_INTERFACE_STATE_LISTENING },
-   { OS_STATE_LEARNING,BASE_STG_INTERFACE_STATE_LEARNING },
-   { OS_STATE_FORWARDING,BASE_STG_INTERFACE_STATE_FORWARDING },
-   { OS_STATE_BLOCKING,BASE_STG_INTERFACE_STATE_BLOCKING }
+static auto
+from_os_stp_state = new std::unordered_map<os_stp_state_t,BASE_STG_INTERFACE_STATE_t,std::hash<int>>{
+    { OS_STATE_DISABLED,BASE_STG_INTERFACE_STATE_DISABLED },
+    { OS_STATE_LISTENING,BASE_STG_INTERFACE_STATE_LISTENING },
+    { OS_STATE_LEARNING,BASE_STG_INTERFACE_STATE_LEARNING },
+    { OS_STATE_FORWARDING,BASE_STG_INTERFACE_STATE_FORWARDING },
+    { OS_STATE_BLOCKING,BASE_STG_INTERFACE_STATE_BLOCKING }
 };
+
 
 static inline unsigned int nas_stg_get_next_index() {
     return nas_stg_ids.alloc_id();
@@ -137,8 +138,8 @@ static bool nas_update_stp_state(nas_stg_entry_t * entry, hal_ifindex_t ifindex,
      * otherwise use the normal physical interface index
      */
 
-    auto it = nas_lag_map.find(ifindex);
-    if( it == nas_lag_map.end()){
+    auto it = nas_lag_map->find(ifindex);
+    if( it == nas_lag_map->end()){
         if (!nas_stg_intf_to_port(ifindex, &intf_ctrl)) {
             return false;
         }
@@ -224,8 +225,8 @@ bool nas_create_stg_for_vlan(hal_vlan_id_t id,hal_ifindex_t bid){
     //For Open Source default switch will be always 0
     entry.switch_id = default_switch_id;
 
-    auto npu_it = switch_to_npu_map.find(entry.switch_id);
-    if (npu_it == switch_to_npu_map.end()) {
+    auto npu_it = switch_to_npu_map->find(entry.switch_id);
+    if (npu_it == switch_to_npu_map->end()) {
         NAS_STG_LOG(ERR,  "No such switch ID %d exist", entry.switch_id);
         return false;
     }
@@ -246,12 +247,12 @@ bool nas_create_stg_for_vlan(hal_vlan_id_t id,hal_ifindex_t bid){
     }
 
     entry.nas_stg_id = nas_stg_get_next_index();
-    bridge_to_stg_map[bid] = entry.nas_stg_id;
+    bridge_to_stg_map->insert({bid,entry.nas_stg_id});
     entry.vlan_list.insert(id);
     entry.bridge_index = bid;
     entry.cps_created = false;
     vlan_to_stg_map[id] = entry.nas_stg_id;
-    nas_stg_table.insert(nas_stg_table_pair(entry.nas_stg_id, std::move(entry)));
+    nas_stg_table->insert(nas_stg_table_pair(entry.nas_stg_id, std::move(entry)));
     NAS_STG_LOG(DEBUG, "New STG Entry with id %d created", entry.nas_stg_id);
     return true;
 }
@@ -266,8 +267,8 @@ static bool nas_stg_create_for_bridge(hal_ifindex_t bid) {
         // If VLAN ID has an associated STG instance don't create new instance
         auto sit = vlan_to_stg_map.find(vit->second);
         if(sit != vlan_to_stg_map.end()){
-            auto entry_it = nas_stg_table.find(sit->second);
-            if (entry_it != nas_stg_table.end()){
+            auto entry_it = nas_stg_table->find(sit->second);
+            if (entry_it != nas_stg_table->end()){
                 nas_stg_entry_t * entry = &(entry_it->second);
                 if(entry->vlan_list.size()>1){
                     NAS_STG_LOG(DEBUG,"Create new STG instance for vlan %d",sit->first);
@@ -315,8 +316,10 @@ static bool nas_stg_update_os_stp_state(hal_ifindex_t intfindex,
     if (state == BASE_STG_INTERFACE_STATE_BLOCKING){
         state = BASE_STG_INTERFACE_STATE_DISABLED;
     }
-    auto it = to_os_stp_state.find(state);
-    if(it == to_os_stp_state.end()){
+
+
+    auto it = to_os_stp_state->find(state);
+    if(it == to_os_stp_state->end()){
         NAS_STG_LOG(ERR,"Invalid STP State %d to update os",state);
         return false;
     }
@@ -352,13 +355,13 @@ static bool nas_stg_update_os_stp_state(hal_ifindex_t intfindex,
 
 // Get the default stg entry for the default switch
 static bool nas_stg_get_default_entry(nas_stg_entry_t **entry) {
-    auto default_stg_it = switch_to_default_stg_map.find(default_switch_id);
-    if (default_stg_it == switch_to_default_stg_map.end()) {
+    auto default_stg_it = switch_to_default_stg_map->find(default_switch_id);
+    if (default_stg_it == switch_to_default_stg_map->end()) {
         NAS_STG_LOG(ERR, "No default switch id exist");
         return false;
     }
-    auto stg_table_it = nas_stg_table.find(default_stg_it->second);
-    if (stg_table_it == nas_stg_table.end()) {
+    auto stg_table_it = nas_stg_table->find(default_stg_it->second);
+    if (stg_table_it == nas_stg_table->end()) {
         NAS_STG_LOG(ERR, "No Default STG Entry exist");
         return false;
     }
@@ -369,14 +372,14 @@ static bool nas_stg_get_default_entry(nas_stg_entry_t **entry) {
 
 // Get the default NDI Id for a given switch id and npu id
 static bool nas_stg_get_default_ndi_id(nas_switch_id_t sid, npu_id_t npu_id, ndi_stg_id_t *ndi_id){
-    auto it = switch_to_default_stg_map.find(sid);
-    if (it == switch_to_default_stg_map.end()) {
+    auto it = switch_to_default_stg_map->find(sid);
+    if (it == switch_to_default_stg_map->end()) {
         NAS_STG_LOG(ERR, "No switch id %d exist", sid);
         return false;
     }
 
-    auto sit = nas_stg_table.find(it->second);
-    if (sit == nas_stg_table.end()) {
+    auto sit = nas_stg_table->find(it->second);
+    if (sit == nas_stg_table->end()) {
         NAS_STG_LOG(ERR, "No Entry id %d exist", it->second);
         return false;
     }
@@ -397,8 +400,9 @@ t_std_error nas_stg_update_stg_state(hal_ifindex_t bid, hal_ifindex_t intfindex,
                                      unsigned int os_state) {
 
     std_mutex_simple_lock_guard lock(&nas_stg_mutex);
-    auto it = from_os_stp_state.find((os_stp_state_t)os_state);
-    if( it == from_os_stp_state.end()){
+
+    auto it = from_os_stp_state->find((os_stp_state_t)os_state);
+    if( it == from_os_stp_state->end()){
         NAS_STG_LOG(ERR,"Invalid STP State received %d",os_state);
         return STD_ERR(STG,PARAM,0);
     }
@@ -426,8 +430,8 @@ t_std_error nas_stg_update_stg_state(hal_ifindex_t bid, hal_ifindex_t intfindex,
 
         // If vlan has an STG instance associated use that entry else use default entry
         if (sit != vlan_to_stg_map.end()) {
-            auto stg_table_it = nas_stg_table.find(sit->second);
-            if (stg_table_it == nas_stg_table.end()) {
+            auto stg_table_it = nas_stg_table->find(sit->second);
+            if (stg_table_it == nas_stg_table->end()) {
                 NAS_STG_LOG(ERR, "No STG Entry with bridge index %d and ID %d exist", bid,
                         sit->second);
                 return STD_ERR(STG, NEXIST, 0);
@@ -574,9 +578,9 @@ t_std_error nas_stg_delete_session(nas_stg_id_t id) {
         NAS_STG_LOG(ERR,"Cannot deleted default STG instance");
         return STD_ERR(STG,FAIL,0);
     }
-    nas_stg_table_it table_it = nas_stg_table.find(id);
+    nas_stg_table_it table_it = nas_stg_table->find(id);
 
-    if (table_it != nas_stg_table.end()) {
+    if (table_it != nas_stg_table->end()) {
         nas_stg_entry_t & entry = table_it->second;
 
         // Remove all the vlans associated with this stg id
@@ -598,7 +602,7 @@ t_std_error nas_stg_delete_session(nas_stg_id_t id) {
 
         NAS_STG_LOG(DEBUG, "Deleted the STG Instance with ID %d", entry.nas_stg_id);
         nas_stg_remove_index(entry.nas_stg_id);
-        nas_stg_table.erase(table_it);
+        nas_stg_table->erase(table_it);
 
     } else {
         NAS_STG_LOG(ERR,  "No STG instance with Id %d exist", id);
@@ -624,8 +628,8 @@ static bool nas_stg_add_vlan(nas_stg_entry_t * entry, hal_vlan_id_t vlan_id){
 
    auto vlan_to_stg_it = vlan_to_stg_map.find(vlan_id);
    if (vlan_to_stg_it != vlan_to_stg_map.end()){
-       auto stg_table_it = nas_stg_table.find(vlan_to_stg_it->second);
-       if(stg_table_it == nas_stg_table.end()){
+       auto stg_table_it = nas_stg_table->find(vlan_to_stg_it->second);
+       if(stg_table_it == nas_stg_table->end()){
            NAS_STG_LOG(ERR,"No STG entry %d exist",vlan_to_stg_it->second);
            return false;
        }
@@ -735,8 +739,8 @@ t_std_error nas_stg_cps_create_instance(cps_api_object_t obj) {
     nas_stg_entry_t entry;
     entry.switch_id = 0;
 
-    auto npu_it = switch_to_npu_map.find(entry.switch_id);
-    if (npu_it == switch_to_npu_map.end()) {
+    auto npu_it = switch_to_npu_map->find(entry.switch_id);
+    if (npu_it == switch_to_npu_map->end()) {
         NAS_STG_LOG(ERR, "No such switch ID %d exist", entry.switch_id);
         return STD_ERR(STG, NEXIST, 0);
     }
@@ -758,7 +762,7 @@ t_std_error nas_stg_cps_create_instance(cps_api_object_t obj) {
         entry.cps_created = true;
         cps_api_set_key_data(obj,BASE_STG_ENTRY_ID,cps_api_object_ATTR_T_U32,
                                   &entry.nas_stg_id,sizeof(entry.nas_stg_id));
-        nas_stg_table.insert(nas_stg_table_pair(entry.nas_stg_id, std::move(entry)));
+        nas_stg_table->insert(nas_stg_table_pair(entry.nas_stg_id, std::move(entry)));
         NAS_STG_LOG(DEBUG, "Created new STG Entry with id %d", entry.nas_stg_id);
     }
     return nas_stg_set_instance(obj, entry.nas_stg_id);
@@ -769,8 +773,8 @@ t_std_error nas_stg_set_instance(cps_api_object_t obj, nas_stg_id_t stg_id) {
 
     std_mutex_simple_lock_guard lock(&nas_stg_mutex);
     NAS_STG_LOG(DEBUG,"Updating STG id %d",stg_id);
-    nas_stg_table_it it = nas_stg_table.find(stg_id);
-    if (it == nas_stg_table.end()) {
+    nas_stg_table_it it = nas_stg_table->find(stg_id);
+    if (it == nas_stg_table->end()) {
         NAS_STG_LOG(ERR,  "No STG id %d exist", stg_id);
         return STD_ERR(STG, NEXIST, 0);
     }
@@ -796,8 +800,8 @@ t_std_error nas_stg_add_vlan_to_bridge(hal_ifindex_t bid, hal_vlan_id_t vlan_id)
     auto it = bridge_to_vlan_map.find(bid);
     const hal_vlan_id_t default_vlan = 1;
     if (it == bridge_to_vlan_map.end()) {
-        bridge_to_vlan_map[bid] = vlan_id == 0 ? default_vlan : vlan_id;
-        NAS_STG_LOG(DEBUG,  "Adding Bridge %d to VLAN with id %d", bid,  bridge_to_vlan_map[bid]);
+        bridge_to_vlan_map[bid] =  (vlan_id == 0 ? default_vlan : vlan_id);
+        NAS_STG_LOG(DEBUG,  "Adding Bridge %d to VLAN with id %d", bid, vlan_id == 0 ? default_vlan : vlan_id );
     } else {
         NAS_STG_LOG(DEBUG,  "Already vlan exist with bridge id %d", bid);
         return STD_ERR(STG, PARAM, 0);
@@ -809,13 +813,13 @@ t_std_error nas_stg_delete_instance(hal_ifindex_t bid) {
 
     t_std_error rc;
     std_mutex_simple_lock_guard lock(&nas_stg_mutex);
-    nas_br_to_stg_map_it it = bridge_to_stg_map.find(bid);
+    nas_br_to_stg_map_it it = bridge_to_stg_map->find(bid);
 
-    if (it != bridge_to_stg_map.end()) {
+    if (it != bridge_to_stg_map->end()) {
         if ((rc = nas_stg_delete_session(it->second)) != STD_ERR_OK) {
             return rc;
         }
-        bridge_to_stg_map.erase(it);
+        bridge_to_stg_map->erase(it);
         auto vit = bridge_to_vlan_map.find(bid);
         if (vit != bridge_to_vlan_map.end()) {
             auto stg_it = vlan_to_stg_map.find(vit->second);
@@ -889,7 +893,7 @@ t_std_error nas_stg_get_all_info(cps_api_object_list_t list) {
 
     std_mutex_simple_lock_guard lock(&nas_stg_mutex);
 
-    for (nas_stg_table_it tit = nas_stg_table.begin(); tit != nas_stg_table.end(); ++tit) {
+    for (nas_stg_table_it tit = nas_stg_table->begin(); tit != nas_stg_table->end(); ++tit) {
 
         cps_api_object_t obj = cps_api_object_list_create_obj_and_append(list);
         if (obj == NULL) {
@@ -908,9 +912,9 @@ t_std_error nas_stg_get_instance_info(cps_api_object_list_t list, nas_stg_id_t i
                                       nas_stg_port_list_t* intf_list) {
 
     std_mutex_simple_lock_guard lock(&nas_stg_mutex);
-    nas_stg_table_it tit = nas_stg_table.find(id);
+    nas_stg_table_it tit = nas_stg_table->find(id);
 
-    if (tit != nas_stg_table.end()) {
+    if (tit != nas_stg_table->end()) {
         cps_api_object_t obj = cps_api_object_list_create_obj_and_append(list);
         if (obj == NULL) {
             NAS_STG_LOG(ERR, "Failed to create/append new object to list");
@@ -940,15 +944,15 @@ t_std_error nas_stg_create_default_instance() {
     std_mutex_simple_lock_guard lock(&nas_stg_mutex);
 
 
-    auto npu_it = switch_to_npu_map.begin();
-    if (npu_it == switch_to_npu_map.end()) {
+    auto npu_it = switch_to_npu_map->begin();
+    if (npu_it == switch_to_npu_map->end()) {
         NAS_STG_LOG(ERR, "No switch ID %d exist");
         return STD_ERR(STG, NEXIST, 0);
     }
 
     hal_vlan_id_t vlan_id;
     // For each switch create a new entry
-    for (; npu_it != switch_to_npu_map.end(); ++npu_it) {
+    for (; npu_it != switch_to_npu_map->end(); ++npu_it) {
         nas_stg_entry_t entry;
         nas_stg_npu_ids & npu_ids = npu_it->second;
 
@@ -960,13 +964,13 @@ t_std_error nas_stg_create_default_instance() {
         }
 
         entry.nas_stg_id = nas_stg_get_next_index();
-        switch_to_default_stg_map.insert(
+        switch_to_default_stg_map->insert(
                 nas_stg_switch_defult_stg_map_pair_t(npu_it->first, entry.nas_stg_id));
         entry.switch_id = npu_it->first;
         entry.vlan_list.insert(vlan_id);
         entry.cps_created = true;
         vlan_to_stg_map[vlan_id] = entry.nas_stg_id;
-        nas_stg_table.insert(nas_stg_table_pair(entry.nas_stg_id, std::move(entry)));
+        nas_stg_table->insert(nas_stg_table_pair(entry.nas_stg_id, std::move(entry)));
         NAS_STG_LOG(DEBUG, "Created Default STG Instance with Id %d for switch id %d ",
         entry.nas_stg_id,entry.switch_id);
     }
@@ -993,7 +997,7 @@ t_std_error nas_stg_get_npu_list(void) {
             npus.insert(sd->npus[sd_ix]);
         }
 
-        switch_to_npu_map.insert(
+        switch_to_npu_map->insert(
                 nas_stg_switch_npu_pair_t(switches->switch_list[ix], std::move(npus)));
     }
 
@@ -1005,8 +1009,8 @@ t_std_error nas_stg_get_default_instance(cps_api_object_list_t list){
 
     static const nas_switch_id_t nas_switch_id = 0;
     std_mutex_simple_lock_guard lock(&nas_stg_mutex);
-    auto it = switch_to_default_stg_map.find(nas_switch_id);
-    if (it == switch_to_default_stg_map.end()) {
+    auto it = switch_to_default_stg_map->find(nas_switch_id);
+    if (it == switch_to_default_stg_map->end()) {
         NAS_STG_LOG(ERR, "No switch id %d exist", nas_switch_id);
         return STD_ERR(STG,NEXIST,0);
     }
@@ -1032,7 +1036,7 @@ t_std_error nas_stg_vlan_update(hal_vlan_id_t id,bool add,hal_ifindex_t bridge_i
     std_mutex_simple_lock_guard lock(&nas_stg_mutex);
     if(add){
         NAS_STG_LOG(DEBUG,"Adding VLAN %d to Bridge %d",id,bridge_index);
-        bridge_to_vlan_map[bridge_index]=id;
+        bridge_to_vlan_map[bridge_index] = id;
         auto it = vlan_to_stg_map.find(id);
         if( it == vlan_to_stg_map.end()){
             vlan_to_stg_map[id] = entry->nas_stg_id;
@@ -1049,7 +1053,7 @@ t_std_error nas_stg_vlan_update(hal_vlan_id_t id,bool add,hal_ifindex_t bridge_i
             NAS_STG_LOG(DEBUG,"No STG instance for vlan %d exsist",id);
         }else{
             NAS_STG_LOG(DEBUG,"Removing VLAN %d from Bridge %d",id,bridge_index);
-            auto sit = nas_stg_table.find(it->second);
+            auto sit = nas_stg_table->find(it->second);
             nas_stg_entry_t * entry = &(sit->second);
             entry->vlan_list.erase(id);
             vlan_to_stg_map.erase(id);
@@ -1064,8 +1068,8 @@ t_std_error nas_stg_vlan_update(hal_vlan_id_t id,bool add,hal_ifindex_t bridge_i
 t_std_error nas_stg_update_vlans(cps_api_object_t obj, nas_stg_id_t id,bool add){
 
     std_mutex_simple_lock_guard lock(&nas_stg_mutex);
-    auto sit = nas_stg_table.find(id);
-    if (sit == nas_stg_table.end()){
+    auto sit = nas_stg_table->find(id);
+    if (sit == nas_stg_table->end()){
         NAS_STG_LOG(ERR,"No STG Id %d exist to update vlans",id);
         return STD_ERR(STG,NEXIST,0);
     }
@@ -1099,7 +1103,7 @@ t_std_error nas_stg_update_vlans(cps_api_object_t obj, nas_stg_id_t id,bool add)
 
 
 static bool nas_stg_lag_handle_port_delete(hal_ifindex_t lag_index,nas_lag_port_list_t  & del_port_list){
-    for (auto tit = nas_stg_table.begin(); tit != nas_stg_table.end(); ++tit) {
+    for (auto tit = nas_stg_table->begin(); tit != nas_stg_table->end(); ++tit) {
         nas_stg_entry_t & entry = tit->second;
         auto lag_stp_it = entry.stp_states.find(lag_index);
         interface_ctrl_t intf_ctrl;
@@ -1125,8 +1129,8 @@ static bool nas_stg_lag_handle_port_delete(hal_ifindex_t lag_index,nas_lag_port_
 
 
 static bool nas_stg_lag_set(hal_ifindex_t lag_index, cps_api_object_t obj){
-    auto it = nas_lag_map.find(lag_index);
-    if(it == nas_lag_map.end()){
+    auto it = nas_lag_map->find(lag_index);
+    if(it == nas_lag_map->end()){
         NAS_STG_LOG(DEBUG,"No Lag Interface Index %d exist in map",lag_index);
         return false;
     }
@@ -1172,9 +1176,9 @@ static bool nas_stg_lag_set(hal_ifindex_t lag_index, cps_api_object_t obj){
     }
 
     // Set the new member port list for the lag
-    nas_lag_map[lag_index]=std::move(update_port_list);
+    it->second = update_port_list;
 
-    for (auto tit = nas_stg_table.begin(); tit != nas_stg_table.end(); ++tit) {
+    for (auto tit = nas_stg_table->begin(); tit != nas_stg_table->end(); ++tit) {
        nas_stg_entry_t & entry = tit->second;
        auto lag_stp_it = entry.stp_states.find(lag_index);
 
@@ -1209,7 +1213,7 @@ t_std_error nas_stg_lag_update(hal_vlan_id_t id, bool create){
 
 bool nas_stg_lag_cleanup(hal_ifindex_t lag_index){
 
-    for (auto tit = nas_stg_table.begin(); tit != nas_stg_table.end(); ++tit) {
+    for (auto tit = nas_stg_table->begin(); tit != nas_stg_table->end(); ++tit) {
         nas_stg_entry_t & entry = tit->second;
         auto lag_stp_it = entry.stp_states.find(lag_index);
 
@@ -1231,23 +1235,23 @@ bool nas_stg_lag_cleanup(hal_ifindex_t lag_index){
 t_std_error nas_stg_lag_update(hal_ifindex_t lag_index, cps_api_object_t obj){
     std_mutex_simple_lock_guard lock(&nas_stg_mutex);
     cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
-    auto it = nas_lag_map.find(lag_index);
+    auto it = nas_lag_map->find(lag_index);
 
     if(op == cps_api_oper_CREATE) {
-        if (it == nas_lag_map.end()){
+        if (it == nas_lag_map->end()){
             nas_lag_port_list_t port_list;
-            nas_lag_map.insert(nas_stg_lag_pair(lag_index,std::move(port_list)));
+            nas_lag_map->insert(nas_stg_lag_pair(lag_index,std::move(port_list)));
         }else{
             NAS_STG_LOG(DEBUG,"Lag Interface Index %d already exist in map",lag_index);
         }
     }
     else if (op == cps_api_oper_DELETE) {
-        if (it != nas_lag_map.end()){
+        if (it != nas_lag_map->end()){
             /*
              * reset the port states to blocking when port-channel is deleted
              */
             nas_stg_lag_cleanup(lag_index);
-            nas_lag_map.erase(it);
+            nas_lag_map->erase(it);
         }else{
             NAS_STG_LOG(ERR,"No Lag Interface Index %d exist in map",lag_index);
             return STD_ERR(STG,NEXIST,0);

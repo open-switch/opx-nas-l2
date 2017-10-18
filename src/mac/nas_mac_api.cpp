@@ -165,6 +165,17 @@ t_std_error nas_mac_update_entry_in_os(nas_mac_entry_t *entry,
      cps_api_object_attr_add_u16(og.get(),BASE_MAC_TABLE_VLAN,entry->entry_key.vlan_id);
      cps_api_object_attr_add(og.get(),BASE_MAC_TABLE_MAC_ADDRESS,(void *)&entry->entry_key.mac_addr,
                                  sizeof(entry->entry_key.mac_addr));
+
+     interface_ctrl_t intf_ctrl;
+     memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
+
+     intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
+     intf_ctrl.if_index = entry->ifindex;
+
+     if(dn_hal_get_interface_info(&intf_ctrl) == STD_ERR_OK) {
+         cps_api_object_attr_add(og.get(),BASE_MAC_TABLE_IFNAME,(void *)intf_ctrl.if_name,
+                                     strlen(intf_ctrl.if_name)+1);
+     }
      t_std_error rc = nas_os_mac_update_entry(og.get());
      return rc;
 }
@@ -524,7 +535,7 @@ t_std_error nas_mac_handle_if_down(hal_ifindex_t ifindex){
     return nas_mac_send_cps_event(&flush_entry,1);
 }
 
-static std::unordered_map<unsigned int,unsigned int> ndi_to_nas_mac_ev =
+static auto ndi_to_nas_mac_ev = new std::unordered_map<unsigned int,unsigned int>
 {
     {NDI_MAC_EVENT_LEARNED, NAS_MAC_ADD},
     {NDI_MAC_EVENT_AGED,NAS_MAC_DEL},
@@ -535,7 +546,6 @@ static std::unordered_map<unsigned int,unsigned int> ndi_to_nas_mac_ev =
 void nas_mac_event_notification_cb(npu_id_t npu_id, ndi_mac_event_type_t ev_type, ndi_mac_entry_t *mac_entry, bool is_lag_index)
 {
     if(ev_type == NDI_MAC_EVENT_INVALID) return;
-
 
     nas_mac_npu_event_t  mac_event;
     memset(&mac_event,0,sizeof(mac_event));
@@ -566,8 +576,8 @@ void nas_mac_event_notification_cb(npu_id_t npu_id, ndi_mac_event_type_t ev_type
     memcpy(mac_event.entry.entry_key.mac_addr, mac_entry->mac_addr, sizeof(hal_mac_addr_t));
     mac_event.entry.pkt_action = mac_entry->action;
 
-    auto it = ndi_to_nas_mac_ev.find(ev_type);
-    if(it != ndi_to_nas_mac_ev.end()){
+    auto it = ndi_to_nas_mac_ev->find(ev_type);
+    if(it != ndi_to_nas_mac_ev->end()){
         mac_event.op_type = (nas_l2_mac_op_t)it->second;
     }else{
         NAS_MAC_LOG(ERR,"Invalid NDI event type %d",ev_type);

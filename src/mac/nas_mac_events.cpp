@@ -28,7 +28,7 @@
 #include "dell-base-l2-mac.h"
 
 static cps_api_event_service_handle_t handle;
-static unsigned int max_pub_thresold = 200;
+static unsigned int max_pub_thresold = 40;
 static unsigned int max_obj_pub_thresold = 1000;
 
 t_std_error nas_mac_event_handle_init(){
@@ -56,8 +56,7 @@ t_std_error nas_mac_event_publish(cps_api_object_t obj){
     return STD_ERR_OK;
 }
 
-static std::unordered_map<unsigned int,unsigned int> nas_to_pub_ev_type =
-{
+static auto nas_to_pub_ev_type = new std::unordered_map<unsigned int,unsigned int>{
     {NAS_MAC_ADD,BASE_MAC_MAC_EVENT_TYPE_LEARNT},
     {NAS_MAC_DEL,BASE_MAC_MAC_EVENT_TYPE_AGED},
     {NAS_MAC_FLUSH,BASE_MAC_MAC_EVENT_TYPE_FLUSHED},
@@ -67,9 +66,9 @@ static std::unordered_map<unsigned int,unsigned int> nas_to_pub_ev_type =
 void nas_mac_add_event_entry_to_obj(cps_api_object_t obj,nas_mac_entry_t & entry,nas_l2_mac_op_t add, unsigned int index){
 
     BASE_MAC_MAC_EVENT_TYPE_t ev_type;
-    auto it = nas_to_pub_ev_type.find(add);
+    auto it = nas_to_pub_ev_type->find(add);
 
-    if(it != nas_to_pub_ev_type.end()){
+    if(it != nas_to_pub_ev_type->end()){
         ev_type = (BASE_MAC_MAC_EVENT_TYPE_t)it->second;
     }else{
         NAS_MAC_LOG(ERR,"Invalid nas l2 mac op %d for publishing events",add);

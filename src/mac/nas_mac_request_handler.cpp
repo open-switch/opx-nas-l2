@@ -29,10 +29,10 @@
 #include <unistd.h>
 #include <vector>
 
-static nas_mac_cps_event_queue_t nas_mac_request_queue;
-static nas_mac_cps_event_queue_t mac_delete_queue;
+static auto nas_mac_request_queue = new nas_mac_cps_event_queue_t;
+static auto mac_delete_queue = new nas_mac_cps_event_queue_t;
 bool clear_all = false;
-static nas_mac_npu_event_queue_t nas_mac_event_queue;
+static auto nas_mac_event_queue = new nas_mac_npu_event_queue_t;
 static size_t max_obj_pub_thresold = 1000;
 static int event_fd[2];
 static unsigned int client_count = 0;
@@ -48,8 +48,8 @@ static size_t port_vlan_flush_count  = 0;
 
 
 
-static std::unordered_map <hal_ifindex_t, nas_mac_cps_event_t> port_flush_queue;
-static std::unordered_map <hal_vlan_id_t, nas_mac_cps_event_t> vlan_flush_queue;
+static auto port_flush_queue = new std::unordered_map <hal_ifindex_t, nas_mac_cps_event_t>;
+static auto vlan_flush_queue = new std::unordered_map <hal_vlan_id_t, nas_mac_cps_event_t>;
 
 typedef struct port_vlan_flush{
     hal_ifindex_t ifindex;
@@ -71,10 +71,11 @@ struct port_vlan_flush_hash{
     }
 };
 
-static std::unordered_map<port_vlan_flush_t, nas_mac_cps_event_t, port_vlan_flush_hash> port_vlan_flush_queue;
+static auto port_vlan_flush_queue = new std::unordered_map<port_vlan_flush_t,
+                                    nas_mac_cps_event_t, port_vlan_flush_hash>;
 
 nas_mac_npu_event_queue_t & nas_mac_get_npu_event_queue(){
-    return nas_mac_event_queue;
+    return *nas_mac_event_queue;
 }
 
 void nas_mac_flush_count_dump(void){
@@ -209,58 +210,58 @@ static void nas_mac_clear_hw_mac(nas_mac_cps_event_t & req_entry){
 
 
     if(req_entry.del_type == NDI_MAC_DEL_ALL_ENTRIES){
-        nas_mac_event_queue.clear();
+        nas_mac_event_queue->clear();
         return;
     }
 }
 
 static void nas_mac_compact_flush_requests(){
     if(clear_all){
-        port_flush_queue.clear();
-        vlan_flush_queue.clear();
-        port_vlan_flush_queue.clear();
+        port_flush_queue->clear();
+        vlan_flush_queue->clear();
+        port_vlan_flush_queue->clear();
         clear_all = false;
     }
 
-    for(auto it : port_vlan_flush_queue){
-        if(vlan_flush_queue.find(it.first.vlan_id) == vlan_flush_queue.end() &&
-           port_flush_queue.find(it.first.ifindex) == port_flush_queue.end()){
-            nas_mac_clear_hw_mac(it.second);
+    for(auto it = port_vlan_flush_queue->begin(); it != port_vlan_flush_queue->end() ; ++it){
+        if(vlan_flush_queue->find(it->first.vlan_id) == vlan_flush_queue->end() &&
+           port_flush_queue->find(it->first.ifindex) == port_flush_queue->end()){
+            nas_mac_clear_hw_mac(it->second);
         }
     }
 
-    for(auto it : port_flush_queue){
-        nas_mac_clear_hw_mac(it.second);
+    for(auto it = port_flush_queue->begin(); it != port_flush_queue->end() ; ++it){
+        nas_mac_clear_hw_mac(it->second);
     }
 
-    for(auto it : vlan_flush_queue){
-        nas_mac_clear_hw_mac(it.second);
+    for(auto it = vlan_flush_queue->begin(); it != vlan_flush_queue->end(); ++it){
+        nas_mac_clear_hw_mac(it->second);
     }
 
-    for(auto it : mac_delete_queue){
-        nas_mac_clear_hw_mac(it);
+    for(auto it = mac_delete_queue->begin(); it != mac_delete_queue->end(); ++it){
+        nas_mac_clear_hw_mac(*it);
     }
-    mac_delete_queue.clear();
-    port_flush_queue.clear();
-    vlan_flush_queue.clear();
-    port_vlan_flush_queue.clear();
+    mac_delete_queue->clear();
+    port_flush_queue->clear();
+    vlan_flush_queue->clear();
+    port_vlan_flush_queue->clear();
 
 }
 
 static void nas_mac_drain_cps_queue(int fd,size_t count){
-    if(nas_mac_read_cps_notification(fd,count,nas_mac_request_queue)!=STD_ERR_OK){
+    if(nas_mac_read_cps_notification(fd,count,*nas_mac_request_queue)!=STD_ERR_OK){
         return;
     }
 
-    while(!nas_mac_request_queue.empty()){
-        nas_mac_cps_event_t & req_entry = nas_mac_request_queue.front();
+    while(!nas_mac_request_queue->empty()){
+        nas_mac_cps_event_t & req_entry = nas_mac_request_queue->front();
         switch(req_entry.del_type){
         case NDI_MAC_DEL_BY_PORT:
-            port_flush_queue[req_entry.entry.ifindex] = std::move(req_entry);
+            port_flush_queue->insert({req_entry.entry.ifindex, std::move(req_entry)});
             break;
 
         case NDI_MAC_DEL_BY_VLAN:
-            vlan_flush_queue[req_entry.entry.entry_key.vlan_id] = std::move(req_entry);
+            vlan_flush_queue->insert({req_entry.entry.entry_key.vlan_id,std::move(req_entry)});
             break;
 
         case NDI_MAC_DEL_BY_PORT_VLAN:
@@ -268,25 +269,25 @@ static void nas_mac_drain_cps_queue(int fd,size_t count){
             port_vlan_flush_t pv;
             pv.ifindex=req_entry.entry.ifindex;
             pv.vlan_id=req_entry.entry.entry_key.vlan_id;
-            port_vlan_flush_queue[pv] = std::move(req_entry);
+            port_vlan_flush_queue->insert({pv, std::move(req_entry)});
         }
             break;
 
         case NDI_MAC_DEL_ALL_ENTRIES:
             clear_all = true;
-            mac_delete_queue.push_back(std::move(req_entry));
+            mac_delete_queue->push_back(std::move(req_entry));
             break;
 
         case NDI_MAC_DEL_SINGLE_ENTRY:
-            mac_delete_queue.push_back(std::move(req_entry));
+            mac_delete_queue->push_back(std::move(req_entry));
             break;
 
 
         default:
             break;
         }
-        if(!nas_mac_request_queue.empty()){
-            nas_mac_request_queue.pop_front();
+        if(!nas_mac_request_queue->empty()){
+            nas_mac_request_queue->pop_front();
         }
     }
 
@@ -306,7 +307,7 @@ static void nas_mac_process_events(int fd){
     }
 
     if(ev_hdr.ev_type == NAS_MAC_NPU_EVENT){
-        nas_mac_read_npu_notification(fd,ev_hdr.len,nas_mac_event_queue);
+        nas_mac_read_npu_notification(fd,ev_hdr.len,*nas_mac_event_queue);
     }
 
 
@@ -377,7 +378,7 @@ void nas_l2_mac_req_handler(void){
     FD_SET (server_socket.socket, &mac_master_fd_set);
 
     /*
-     * Currently use 100ms sec as timeout from select, when new mac addresses are being learnt
+     * Currently use 5m sec as timeout from select, when new mac addresses are being learnt
      * don't send notification, let select timeout and if there are any mac addresses needs
      * to be published, publish it in batches.
      */
@@ -387,17 +388,17 @@ void nas_l2_mac_req_handler(void){
     t_std_error rc;
     while(1){
         mac_fd_set = mac_master_fd_set;
-        struct timeval mac_timeout = {0,30000};
+        struct timeval mac_timeout = {0,5000};
 
         if((ret_code = std_select_ignore_intr(max_sock_fd+1,&mac_fd_set,NULL,NULL,&mac_timeout,&rc)) >= 0){
 
             if(ret_code == 0){
-                if(nas_mac_event_queue.size() > 0){
+                if(nas_mac_event_queue->size() > 0){
                    nas_mac_process_pub_queue();
                 }
             }
             else{
-                if(nas_mac_event_queue.size() >= max_obj_pub_thresold){
+                if(nas_mac_event_queue->size() >= max_obj_pub_thresold){
                     nas_mac_process_pub_queue();
                 }
                 nas_mac_process_pending_events(server_socket.socket);

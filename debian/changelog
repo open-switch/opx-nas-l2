@@ -1,3 +1,18 @@
+opx-nas-l2 (1.14.0) unstable; urgency=medium
+
+  * Update: Pass ifname to update mac entry in kernel
+  * Update: Reduce the cps publish message size as infra can't handle bigger messages
+  * Update: Move static global ds for swtich from data segment to heap
+  * Update: Move stg global static ds from data segment to heap
+  * Update: Move sflow global static ds from data segment to heap
+  * Update: Move mirror global static ds from data segment to heap
+  * Update: Move mac stl ds from data segement to heap
+  * Feature: Support ttl,dscp and gre prot type for erspan
+  * Bugfix: Miscellaneous bug fixes
+  * Cleanup: Miscellaneous cleanup
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Fri, 29 Sep 2017 14:38:23 -0800
+
 opx-nas-l2 (1.12.0) unstable; urgency=medium
 
   * Update: Publish flush all mac event

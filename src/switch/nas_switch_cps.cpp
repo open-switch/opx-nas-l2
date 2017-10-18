@@ -208,8 +208,10 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
 
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_MODE:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_LAG_HASH_ALGORITHM:
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_LAG_HASH_SEED_VALUE:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_BRIDGE_TABLE_SIZE:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECMP_HASH_ALGORITHM:
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECMP_HASH_SEED_VALUE:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAC_AGE_TIMER:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ACL_TABLE_MIN_PRIORITY:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ACL_TABLE_MAX_PRIORITY:
@@ -467,17 +469,19 @@ static cps_api_return_code_t nas_set_profile(BASE_SWITCH_SWITCHING_ENTITIES_SWIT
     return cps_api_ret_code_OK;
 }
 
-static const std::unordered_map<cps_api_attr_id_t,
-    cps_api_return_code_t (*)(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t, npu_id_t, cps_api_object_t)> _set_attr_handlers = {
-        { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAC_AGE_TIMER, _set_generic_u32},
-        { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_MODE, _set_generic_u32},
-        { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_LAG_HASH_ALGORITHM, _set_generic_u32 },
-        { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECMP_HASH_ALGORITHM, _set_generic_u32},
-        { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_ECMP_ENTRY_PER_GROUP, nas_set_max_ecmp_per_grp },
-        { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_COUNTER_REFRESH_INTERVAL,_set_generic_u32},
-        { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_DEFAULT_MAC_ADDRESS, _set_generic_mac },
-        { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_PROFILE, nas_set_profile },
-        { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE, nas_set_uft_mode },
+static const auto   _set_attr_handlers = new std::unordered_map<cps_api_attr_id_t,
+        cps_api_return_code_t (*)(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t, npu_id_t, cps_api_object_t)>{
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAC_AGE_TIMER, _set_generic_u32},
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_MODE, _set_generic_u32},
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_LAG_HASH_ALGORITHM, _set_generic_u32 },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_LAG_HASH_SEED_VALUE, _set_generic_u32 },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECMP_HASH_ALGORITHM, _set_generic_u32},
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECMP_HASH_SEED_VALUE, _set_generic_u32 },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_ECMP_ENTRY_PER_GROUP, nas_set_max_ecmp_per_grp },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_COUNTER_REFRESH_INTERVAL,_set_generic_u32},
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_DEFAULT_MAC_ADDRESS, _set_generic_mac },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_PROFILE, nas_set_profile },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE, nas_set_uft_mode },
 };
 
 
@@ -487,7 +491,7 @@ static void remove_same_values(cps_api_object_t now, cps_api_object_t req) {
     for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it)) {
         cps_api_attr_id_t id = cps_api_object_attr_id(it.attr);
 
-        if (_set_attr_handlers.find(id)==_set_attr_handlers.end()) continue;
+        if (_set_attr_handlers->find(id)==_set_attr_handlers->end()) continue;
 
         cps_api_object_attr_t new_val = cps_api_object_e_get(req,&id,1);
         if (new_val==nullptr) continue;
@@ -530,8 +534,8 @@ static cps_api_return_code_t _switch_set(void * context,
     cps_api_object_it_begin(obj,&it);
     for ( ; cps_api_object_it_valid(&it); cps_api_object_it_next(&it)) {
         cps_api_attr_id_t id = cps_api_object_attr_id(it.attr);
-        auto h =_set_attr_handlers.find(id);
-        if (h==_set_attr_handlers.end()) continue;
+        auto h =_set_attr_handlers->find(id);
+        if (h==_set_attr_handlers->end()) continue;
         t_std_error rc = STD_ERR_OK;
         if ((rc=h->second((BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t)id,
                 *npus,obj))!=STD_ERR_OK) {

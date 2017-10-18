@@ -49,6 +49,9 @@ class nas_mirror_entry {
 
 public:
 
+    nas_mirror_entry(){
+        memset(&ndi_mirror_entry,0,sizeof(ndi_mirror_entry));
+    };
 
     void set_id(nas_mirror_id_t id) { nas_mirror_session_id = id ;}
     void set_dst_intf(hal_ifindex_t ifindex){ dst_intf = ifindex ; }
@@ -63,6 +66,9 @@ public:
     void set_src_ip(uint32_t ip_addr){ndi_mirror_entry.src_ip.u.v4_addr = ip_addr ;}
     void set_dst_ip(uint32_t ip_addr){ndi_mirror_entry.dst_ip.u.v4_addr = ip_addr ;}
     void set_src_mac(void * mac){memcpy(ndi_mirror_entry.src_mac, mac, sizeof(hal_mac_addr_t)) ;}
+    void set_ttl(uint8_t ttl){ndi_mirror_entry.ttl = ttl ;}
+    void set_dscp(uint8_t dscp){ndi_mirror_entry.dscp = dscp ;}
+    void set_gre_prot_type(uint16_t gre_prot){ ndi_mirror_entry.gre_prot_type = gre_prot ;}
     void set_dst_mac(void * mac){memcpy(ndi_mirror_entry.dst_mac, mac, sizeof(hal_mac_addr_t)) ;}
     void set_mode(BASE_MIRROR_MODE_t mode){ndi_mirror_entry.mode = mode ;}
     void set_ndi_id(ndi_mirror_id_t id){ndi_mirror_entry.ndi_mirror_id = id ;}
@@ -92,6 +98,9 @@ public:
     const ndi_port_t * get_dst_port(){ return &ndi_mirror_entry.dst_port; }
     const npu_id_t get_npu_id(){return ndi_mirror_entry.dst_port.npu_id ; }
     ndi_mirror_entry_t * get_ndi_entry(){ return &ndi_mirror_entry ;}
+    uint8_t get_ttl(){ return ndi_mirror_entry.ttl ; }
+    uint8_t get_dscp(){ return ndi_mirror_entry.dscp ; }
+    uint16_t get_gre_prot_type(){return ndi_mirror_entry.gre_prot_type ; }
 
 
 private:

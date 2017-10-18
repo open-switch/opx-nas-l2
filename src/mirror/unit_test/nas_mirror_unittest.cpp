@@ -85,10 +85,10 @@ bool nas_mirror_add_same_source_test(){
     if(obj == NULL) return false;
     cps_api_object_set_key(obj,&key);
 
-    unsigned int src_intf = if_nametoindex("e00-1");
+    unsigned int src_intf = if_nametoindex("e101-001-0");
     BASE_CMN_TRAFFIC_PATH_t dir = BASE_CMN_TRAFFIC_PATH_INGRESS_EGRESS;
 
-    cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DST_INTF,if_nametoindex("e00-3"));
+    cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DST_INTF,if_nametoindex("e101-002-0"));
 
     cps_api_attr_id_t ids[3] = {BASE_MIRROR_ENTRY_INTF, 0,BASE_MIRROR_ENTRY_INTF_SRC };
     const int ids_len = sizeof(ids)/sizeof(ids[0]);
@@ -122,10 +122,10 @@ bool nas_mirror_set_test(){
     cps_api_set_key_data(obj,BASE_MIRROR_ENTRY_ID,cps_api_object_ATTR_T_U32,
                              &mirror_id,sizeof(mirror_id));
 
-    unsigned int src_intf = if_nametoindex("e00-4");
+    unsigned int src_intf = if_nametoindex("e101-004-0");
     BASE_CMN_TRAFFIC_PATH_t dir = BASE_CMN_TRAFFIC_PATH_EGRESS;
 
-    cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DST_INTF,if_nametoindex("e00-2"));
+    cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DST_INTF,if_nametoindex("e101-005-0"));
 
     cps_api_attr_id_t ids[3] = {BASE_MIRROR_ENTRY_INTF, 0,BASE_MIRROR_ENTRY_INTF_SRC };
     const int ids_len = sizeof(ids)/sizeof(ids[0]);
@@ -214,10 +214,10 @@ bool nas_mirror_add_test(){
     if(obj == NULL) return false;
     cps_api_object_set_key(obj,&key);
 
-    unsigned int src_intf = if_nametoindex("e00-1");
+    unsigned int src_intf = if_nametoindex("e101-001-0");
     BASE_CMN_TRAFFIC_PATH_t dir = BASE_CMN_TRAFFIC_PATH_INGRESS_EGRESS;
 
-    cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DST_INTF,if_nametoindex("e00-2"));
+    cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DST_INTF,if_nametoindex("e101-002-0"));
 
     cps_api_attr_id_t ids[3] = {BASE_MIRROR_ENTRY_INTF, 0,BASE_MIRROR_ENTRY_INTF_SRC };
     const int ids_len = sizeof(ids)/sizeof(ids[0]);
@@ -269,8 +269,6 @@ bool nas_mirror_get_test(){
                                         cps_api_qualifier_TARGET);
     gp.key_count = 1;
     gp.keys = &key;
-//    cps_api_key_set(&key,CPS_OBJ_KEY_APP_INST_POS,mirror_id);
-//    cps_api_key_set_len(&key,CPS_OBJ_KEY_APP_INST_POS+1);
 
     bool rc = false;
 
@@ -305,10 +303,10 @@ bool nas_mirror_rspan_create(){
     if(obj == NULL) return false;
     cps_api_object_set_key(obj,&key);
 
-    unsigned int src_intf = if_nametoindex("e00-6");
+    unsigned int src_intf = if_nametoindex("e101-006-0");
     BASE_CMN_TRAFFIC_PATH_t dir = BASE_CMN_TRAFFIC_PATH_INGRESS_EGRESS;
 
-    cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DST_INTF,if_nametoindex("e00-8"));
+    cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DST_INTF,if_nametoindex("e101-008-0"));
 
     cps_api_attr_id_t ids[3] = {BASE_MIRROR_ENTRY_INTF, 0,BASE_MIRROR_ENTRY_INTF_SRC };
     const int ids_len = sizeof(ids)/sizeof(ids[0]);
@@ -318,7 +316,7 @@ bool nas_mirror_rspan_create(){
     ids[2]=BASE_MIRROR_ENTRY_INTF_DIRECTION;
     cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&(dir),sizeof(dir));
 
-    src_intf = if_nametoindex("e00-7");
+    src_intf = if_nametoindex("e101-007-0");
     dir = BASE_CMN_TRAFFIC_PATH_EGRESS;
     ids[1] = 1;
     ids[2] = BASE_MIRROR_ENTRY_INTF_SRC;
@@ -370,7 +368,7 @@ bool nas_mirror_rspan_set(){
                                  &rspan_mirror_id,sizeof(rspan_mirror_id));
 
 
-    unsigned int src_intf = if_nametoindex("e00-10");
+    unsigned int src_intf = if_nametoindex("e101-001-00");
     BASE_CMN_TRAFFIC_PATH_t dir = BASE_CMN_TRAFFIC_PATH_EGRESS;
 
     cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DST_INTF,20);
@@ -383,7 +381,7 @@ bool nas_mirror_rspan_set(){
     ids[2]=BASE_MIRROR_ENTRY_INTF_DIRECTION;
     cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&(dir),sizeof(dir));
 
-    src_intf = if_nametoindex("e00-11");
+    src_intf = if_nametoindex("e101-001-0");
     ids[1]= 1;
     ids[2]=BASE_MIRROR_ENTRY_INTF_SRC;
     cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&(src_intf),sizeof(src_intf));
@@ -410,10 +408,10 @@ bool nas_mirror_erspan_create(){
     if(obj == NULL) return false;
     cps_api_object_set_key(obj,&key);
 
-    unsigned int src_intf = if_nametoindex("e00-15");
+    unsigned int src_intf = if_nametoindex("e101-001-0");
     BASE_CMN_TRAFFIC_PATH_t dir = BASE_CMN_TRAFFIC_PATH_INGRESS_EGRESS;
 
-    cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DST_INTF,if_nametoindex("e00-16"));
+    cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DST_INTF,if_nametoindex("e101-002-0"));
 
     cps_api_attr_id_t ids[3] = {BASE_MIRROR_ENTRY_INTF, 0,BASE_MIRROR_ENTRY_INTF_SRC };
     const int ids_len = sizeof(ids)/sizeof(ids[0]);
@@ -434,6 +432,9 @@ bool nas_mirror_erspan_create(){
     uint8_t dst_mac[]={0x90,0xb1,0x1c,0xf4,0x9c,0x5b};
     cps_api_object_attr_add(obj,BASE_MIRROR_ENTRY_DEST_MAC,(void*)dst_mac,6);
     cps_api_object_attr_add(obj,BASE_MIRROR_ENTRY_SOURCE_MAC,(void *)src_mac,6);
+    cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_TTL,200);
+    cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DSCP,5);
+    cps_api_object_attr_add_u16(obj,BASE_MIRROR_ENTRY_GRE_PROTOCOL_TYPE,8894);
 
 
     if(cps_api_create(&tran,obj) != cps_api_ret_code_OK ){
@@ -473,10 +474,10 @@ bool nas_mirror_erspan_set(){
     cps_api_set_key_data(obj,BASE_MIRROR_ENTRY_ID,cps_api_object_ATTR_T_U32,
                                  &erspan_mirror_id,sizeof(erspan_mirror_id));
 
-    unsigned int src_intf = if_nametoindex("e00-18");
+    unsigned int src_intf = if_nametoindex("e101-008-0");
     BASE_CMN_TRAFFIC_PATH_t dir = BASE_CMN_TRAFFIC_PATH_INGRESS_EGRESS;
 
-    cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DST_INTF,if_nametoindex("e00-19"));
+    cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_DST_INTF,if_nametoindex("e101-009-0"));
 
     cps_api_attr_id_t ids[3] = {BASE_MIRROR_ENTRY_INTF, 0,BASE_MIRROR_ENTRY_INTF_SRC };
     const int ids_len = sizeof(ids)/sizeof(ids[0]);
@@ -493,7 +494,6 @@ bool nas_mirror_erspan_set(){
     uint8_t dst_mac[]={11,10,9,8,7,6};
     cps_api_object_attr_add(obj,BASE_MIRROR_ENTRY_DEST_MAC,(void*)dst_mac,6);
     cps_api_object_attr_add(obj,BASE_MIRROR_ENTRY_SOURCE_MAC,(void *)src_mac,6);
-       // cps_api_object_attr_add_u32(obj,BASE_MIRROR_ENTRY_VLAN,3);
 
     if(!nas_mirror_exec_transaction(std::string("set"),&tran,obj)) return false;
 

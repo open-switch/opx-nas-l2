@@ -41,7 +41,7 @@ static std_mutex_lock_create_static_init_fast(nas_sflow_mutex);
 static nas::id_generator_t nas_sflow_ids(MAX_SFLOW_SESSION);
 
 //NAS sFlow table which stores all session information
-static nas_sflow_map_t nas_sflow_table;
+static auto nas_sflow_table = new nas_sflow_map_t;
 
 
 static inline unsigned int nas_sflow_get_next_index(){
@@ -287,7 +287,7 @@ t_std_error nas_sflow_create_session(cps_api_object_t obj){
     cps_api_set_key_data(obj,BASE_SFLOW_ENTRY_ID,cps_api_object_ATTR_T_U32,
                          &nas_sflow_entry.nas_sflow_id,sizeof(nas_sflow_entry.nas_sflow_id));
     NAS_SFLOW_LOG(DEBUG,"Created new nas sflow entry with id %d",nas_sflow_entry.nas_sflow_id);
-    nas_sflow_table.insert(nas_sflow_pair(nas_sflow_entry.nas_sflow_id,std::move(nas_sflow_entry)));
+    nas_sflow_table->insert(nas_sflow_pair(nas_sflow_entry.nas_sflow_id,std::move(nas_sflow_entry)));
 
     return STD_ERR_OK;
 }
@@ -296,9 +296,9 @@ t_std_error nas_sflow_create_session(cps_api_object_t obj){
 t_std_error nas_sflow_delete_session(nas_sflow_id_t id){
 
     std_mutex_simple_lock_guard lock(&nas_sflow_mutex);
-    nas_sflow_map_it it = nas_sflow_table.find(id);
+    nas_sflow_map_it it = nas_sflow_table->find(id);
 
-    if(it == nas_sflow_table.end()) {
+    if(it == nas_sflow_table->end()) {
         NAS_SFLOW_LOG(ERR,"No NAS sFlow session with Id %d exist",(int)id);
         return STD_ERR(SFLOW,NEXIST,0);
     }
@@ -316,7 +316,7 @@ t_std_error nas_sflow_delete_session(nas_sflow_id_t id){
 
     NAS_SFLOW_LOG(DEBUG,"Deleted nas sflow entry with id %d",it->second.nas_sflow_id);
     nas_sflow_remove_index(it->second.nas_sflow_id);
-    nas_sflow_table.erase(it);
+    nas_sflow_table->erase(it);
     return STD_ERR_OK;
 }
 
@@ -326,9 +326,9 @@ t_std_error nas_sflow_update_session(cps_api_object_t obj, nas_sflow_id_t id){
     unsigned int prev_sampling_rate;
     std_mutex_simple_lock_guard lock(&nas_sflow_mutex);
 
-    nas_sflow_map_it sit = nas_sflow_table.find(id);
+    nas_sflow_map_it sit = nas_sflow_table->find(id);
 
-    if(sit == nas_sflow_table.end()){
+    if(sit == nas_sflow_table->end()){
         NAS_SFLOW_LOG(ERR,"No NAS sFlow session with Id %d exist",(int)id);
         return STD_ERR(SFLOW,NEXIST,0);
     }
@@ -395,9 +395,9 @@ static void nas_sflow_fill_object(cps_api_object_t obj,nas_sflow_map_it it){
 
 t_std_error nas_sflow_get_all_info(cps_api_object_list_t list){
     std_mutex_simple_lock_guard lock(&nas_sflow_mutex);
-    nas_sflow_map_it it = nas_sflow_table.begin();
+    nas_sflow_map_it it = nas_sflow_table->begin();
 
-    for ( ; it != nas_sflow_table.end() ; ++it){
+    for ( ; it != nas_sflow_table->end() ; ++it){
         cps_api_object_t obj=cps_api_object_create();
 
         if(obj == NULL){
@@ -419,9 +419,9 @@ t_std_error nas_sflow_get_all_info(cps_api_object_list_t list){
 t_std_error nas_sflow_get_session_info(cps_api_object_list_t list,nas_sflow_id_t id){
 
     std_mutex_simple_lock_guard lock(&nas_sflow_mutex);
-    nas_sflow_map_it it = nas_sflow_table.find(id);
+    nas_sflow_map_it it = nas_sflow_table->find(id);
 
-    if(it == nas_sflow_table.end()){
+    if(it == nas_sflow_table->end()){
         NAS_SFLOW_LOG(ERR,"No NAS sFlow session with Id %d exist",(int)id);
         return STD_ERR(SFLOW,NEXIST,0);
     }
