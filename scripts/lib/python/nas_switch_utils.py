@@ -57,18 +57,28 @@ def show_switch(args):
     for i in l:
         cps_utils.print_obj(i)
 
-def print_switch_details(args):
+def print_switch_uft_info(uft_data, switch_mode):
+    for mode in uft_data:
+        for key in uft_data[mode]:
+            value = cps_object.types.from_data(key, uft_data[mode][key])
+            print key + ' = ' +  str(value)
 
+
+def print_switch_details(args):
     switch_mode=['base-switch/switching-entities/switching-entity/switch-mode']
 
     for key, data in args.items():
-        value = cps_object.types.from_data(key,data)
-        if key in switch_mode:
-                if (value == 1):
-                        print key + " = cut-through (1)"
-                if (value == 2):
-                        print key + " = store-and-forward (2)"
+        if isinstance(data, dict):
+            ''' UFT mode information are stored as a dictionary '''
+            print_switch_uft_info(data, switch_mode)
         else:
+            value = cps_object.types.from_data(key,data)
+            if key in switch_mode:
+                if (value == 1):
+                    print key + " = cut-through (1)"
+                if (value == 2):
+                    print key + " = store-and-forward (2)"
+            else:
                 print key + ' = ' +  str(value)
 
 cps_utils.add_print_function (switch_key_string,print_switch_details)
