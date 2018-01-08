@@ -122,8 +122,6 @@ t_std_error nas_mac_handle_if_down(hal_ifindex_t ifindex);
 /* consumer thread which dequeues the mac operation requests */
 void nas_l2_mac_req_handler(void);
 
-t_std_error nas_mac_lag_obj_id_get (hal_ifindex_t if_index, ndi_obj_id_t& obj_id);
-
 /* Delete the mac entry from hw */
 t_std_error nas_mac_delete_entries_from_hw(nas_mac_entry_t *entry,ndi_mac_delete_type_t del_type,
                                                   bool subtype_all);

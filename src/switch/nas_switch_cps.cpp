@@ -145,8 +145,8 @@ static void _fill_switch_uft_info(cps_api_object_t obj,
                  uft_ids[2] = BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE_INFO_HOST_TABLE_SIZE;
                  cps_api_object_e_add(obj, uft_ids, ids_len, cps_api_object_ATTR_T_U32,
                                          &l3_host_size, sizeof(l3_host_size));
+                 ++uft_ids[1];
             }
-            ++uft_ids[1];
         }
     }
 
@@ -490,7 +490,14 @@ static void remove_same_values(cps_api_object_t now, cps_api_object_t req) {
     cps_api_object_it_begin(now,&it);
     for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it)) {
         cps_api_attr_id_t id = cps_api_object_attr_id(it.attr);
-
+        /*
+         *  The attribute that takes effect in next-boot needs to be skip
+         *  from removing same values.
+         */
+        if ((id == BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_ECMP_ENTRY_PER_GROUP) ||
+            (id == BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_PROFILE) ||
+            (id == BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE)) continue;
+ 
         if (_set_attr_handlers->find(id)==_set_attr_handlers->end()) continue;
 
         cps_api_object_attr_t new_val = cps_api_object_e_get(req,&id,1);

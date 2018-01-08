@@ -82,7 +82,7 @@ public:
         ndi_mirror_entry.is_dest_lag = true;
         ndi_mirror_entry.ndi_lag_id = id;
     };
-    bool update_src_intf_map(nas_mirror_src_intf_map_t & intf_map);
+    t_std_error update_src_intf_map(nas_mirror_src_intf_map_t & intf_map);
     bool remove_src_intf();
     nas_mirror_id_t get_id() { return nas_mirror_session_id;}
     hal_ifindex_t get_dst_intf(){ return dst_intf ; }

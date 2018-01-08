@@ -28,6 +28,7 @@
 #include "cps_api_operation.h"
 #include "cps_api_key.h"
 #include "cps_api_object_key.h"
+#include "cps_api_object_tools.h"
 #include "cps_class_map.h"
 #include "event_log.h"
 #include "hal_if_mapping.h"
@@ -187,11 +188,12 @@ static bool get_src_intf_attr(cps_api_object_t obj,
 }
 
 
-static bool nas_mirror_update_src_port(nas_mirror_entry * entry,hal_ifindex_t ifindex,
+static t_std_error nas_mirror_update_src_port(nas_mirror_entry * entry,hal_ifindex_t ifindex,
                   BASE_CMN_TRAFFIC_PATH_t current_dir,BASE_CMN_TRAFFIC_PATH_t old_dir){
 
     ndi_mirror_src_port_t port;
-    if(!nas_mirror_intf_to_ndi_src_port(ifindex,current_dir,&port)) return false;
+    t_std_error rc = STD_ERR(MIRROR,FAIL,0);
+    if(!nas_mirror_intf_to_ndi_src_port(ifindex,current_dir,&port)) return rc;
 
     /*
      * Update the direction for source Mirror Port
@@ -204,9 +206,9 @@ static bool nas_mirror_update_src_port(nas_mirror_entry * entry,hal_ifindex_t if
        (port.direction == BASE_CMN_TRAFFIC_PATH_EGRESS && old_dir == BASE_CMN_TRAFFIC_PATH_INGRESS)){
         BASE_CMN_TRAFFIC_PATH_t new_dir = port.direction;
         port.direction = old_dir;
-        if(ndi_mirror_update_direction(entry->get_ndi_entry(),port, false)!=STD_ERR_OK) return false;
+        if((rc = ndi_mirror_update_direction(entry->get_ndi_entry(),port, false))!=STD_ERR_OK) return rc;
         port.direction = new_dir;
-        if(ndi_mirror_update_direction(entry->get_ndi_entry(),port, true)!=STD_ERR_OK) return false;
+        if((rc =ndi_mirror_update_direction(entry->get_ndi_entry(),port, true))!=STD_ERR_OK) return rc;
 
     }else if(port.direction== BASE_CMN_TRAFFIC_PATH_INGRESS_EGRESS){
         if(old_dir == BASE_CMN_TRAFFIC_PATH_INGRESS){
@@ -214,8 +216,8 @@ static bool nas_mirror_update_src_port(nas_mirror_entry * entry,hal_ifindex_t if
         }else{
             port.direction = BASE_CMN_TRAFFIC_PATH_INGRESS;
         }
-        if(ndi_mirror_update_direction(entry->get_ndi_entry(),port, true)!=STD_ERR_OK){
-            return false;
+        if((rc = ndi_mirror_update_direction(entry->get_ndi_entry(),port, true))!=STD_ERR_OK){
+            return rc;
         }
     }else if(old_dir == BASE_CMN_TRAFFIC_PATH_INGRESS_EGRESS){
         if(port.direction == BASE_CMN_TRAFFIC_PATH_INGRESS){
@@ -223,50 +225,49 @@ static bool nas_mirror_update_src_port(nas_mirror_entry * entry,hal_ifindex_t if
         }else{
             port.direction = BASE_CMN_TRAFFIC_PATH_INGRESS;
         }
-        if(ndi_mirror_update_direction(entry->get_ndi_entry(),port, false)!=STD_ERR_OK){
-            return false;
+        if((rc = ndi_mirror_update_direction(entry->get_ndi_entry(),port, false))!=STD_ERR_OK){
+            return rc;
         }
     }
-    return true;
+    return STD_ERR_OK;
 }
 
 
-bool nas_mirror_add_del_src_port(ndi_mirror_entry_t * entry,hal_ifindex_t ifindex,
+t_std_error nas_mirror_add_del_src_port(ndi_mirror_entry_t * entry,hal_ifindex_t ifindex,
                                     BASE_CMN_TRAFFIC_PATH_t dir, bool enable){
     ndi_mirror_src_port_t port;
-    if(!nas_mirror_intf_to_ndi_src_port(ifindex,dir,&port)) return false;
+    t_std_error rc;
+    if(!nas_mirror_intf_to_ndi_src_port(ifindex,dir,&port)) return STD_ERR(MIRROR,PARAM,0);
 
     if(port.direction == BASE_CMN_TRAFFIC_PATH_INGRESS_EGRESS){
         port.direction = BASE_CMN_TRAFFIC_PATH_INGRESS;
-        if(ndi_mirror_update_direction(entry,port, enable)!=STD_ERR_OK){
-            return false;
+        if((rc = ndi_mirror_update_direction(entry,port, enable))!=STD_ERR_OK){
+            return rc;
         }
         port.direction = BASE_CMN_TRAFFIC_PATH_EGRESS;
-        if(ndi_mirror_update_direction(entry,port, enable)!=STD_ERR_OK){
+        if((rc = ndi_mirror_update_direction(entry,port, enable))!=STD_ERR_OK){
             port.direction = BASE_CMN_TRAFFIC_PATH_INGRESS;
-            if(ndi_mirror_update_direction(entry,port, !(enable))!=STD_ERR_OK){
-                return false;
-            }
-            return false;
+            ndi_mirror_update_direction(entry,port, !(enable));
+            return rc;
         }
     }else{
-        if(ndi_mirror_update_direction(entry,port, enable)!=STD_ERR_OK){
-            return false;
+        if((rc = ndi_mirror_update_direction(entry,port, enable))!=STD_ERR_OK){
+            return rc;
         }
     }
-    return true;
+    return STD_ERR_OK;
 }
 
 
 bool nas_mirror_entry::remove_src_intf(){
     for(auto it = nas_mirror_src_intf.begin() ; it != nas_mirror_src_intf.end() ; ++it){
-        if(!nas_mirror_add_del_src_port(&ndi_mirror_entry,it->first,it->second,false)) return false;
+        if(nas_mirror_add_del_src_port(&ndi_mirror_entry,it->first,it->second,false) != STD_ERR_OK) return false;
     }
     return true;
 }
 
 
-bool nas_mirror_entry::update_src_intf_map(nas_mirror_src_intf_map_t & intf_map){
+t_std_error nas_mirror_entry::update_src_intf_map(nas_mirror_src_intf_map_t & intf_map){
 
     /*
      * Check if existing source interface exist in the new list, if not then delete
@@ -278,11 +279,13 @@ bool nas_mirror_entry::update_src_intf_map(nas_mirror_src_intf_map_t & intf_map)
      * If an entry is there but its direction is changed then update the source mirror
      * interface direction
      */
+    t_std_error rc;
     for(auto it = nas_mirror_src_intf.begin() ; it != nas_mirror_src_intf.end() ;){
         auto intf_it = intf_map.find(it->first);
         if(intf_it == intf_map.end()){
-            if(!nas_mirror_add_del_src_port(&ndi_mirror_entry,it->first,it->second, false)){
-                return false;
+            if((rc = nas_mirror_add_del_src_port(&ndi_mirror_entry,it->first,
+                     it->second, false))!=STD_ERR_OK) {
+                return rc;
             }
             nas_mirror_src_intf.erase(it++);
         }else{
@@ -293,16 +296,18 @@ bool nas_mirror_entry::update_src_intf_map(nas_mirror_src_intf_map_t & intf_map)
     for(auto it = intf_map.begin() ; it != intf_map.end() ; ++it){
         auto intf_it = nas_mirror_src_intf.find(it->first);
         if(intf_it == nas_mirror_src_intf.end()){
-            if(!nas_mirror_add_del_src_port(&ndi_mirror_entry,it->first,it->second,true)){
-                return false;
+            if((rc = nas_mirror_add_del_src_port(&ndi_mirror_entry,it->first,
+                     it->second,true)) != STD_ERR_OK){
+                return rc;
             }
             nas_mirror_src_intf[it->first]=it->second;
         }else if(intf_it->second != it->second){
-            if(!nas_mirror_update_src_port(&(*this),it->first,it->second,intf_it->second)) return false;
+            if((rc = nas_mirror_update_src_port(&(*this),it->first,
+                     it->second,intf_it->second)) != STD_ERR_OK) return rc;
             nas_mirror_src_intf[intf_it->first]=it->second;
         }
     }
-    return true;
+    return STD_ERR_OK;
 }
 
 
@@ -322,8 +327,7 @@ static inline bool nas_mirror_validate_attr(nas::attr_set_t &attrs){
 static inline bool nas_mirror_validate_erspan_attr(nas::attr_set_t &attrs){
 
     if(!(attrs.contains(BASE_MIRROR_ENTRY_SOURCE_IP) && attrs.contains(BASE_MIRROR_ENTRY_DESTINATION_IP) &&
-        attrs.contains(BASE_MIRROR_ENTRY_SOURCE_MAC) && attrs.contains(BASE_MIRROR_ENTRY_DEST_MAC) &&
-        attrs.contains(BASE_MIRROR_ENTRY_ERSPAN_VLAN_ID))) {
+        attrs.contains(BASE_MIRROR_ENTRY_SOURCE_MAC) && attrs.contains(BASE_MIRROR_ENTRY_DEST_MAC))) {
         NAS_MIRROR_LOG(ERR,"Missing Necessary Parameters for creating a ERSPAN Mirroring Session");
         return false;
     }
@@ -553,7 +557,11 @@ static bool nas_mirror_fill_entry(cps_api_object_t obj,nas_mirror_entry *entry
     if(update){
         if(!nas_mirror_update_attrs(entry,attrs)) return false;
         if(new_intf_map.size() > 0){
-            if(!entry->update_src_intf_map(new_intf_map)) return false;
+            t_std_error rc;
+            if(( rc = entry->update_src_intf_map(new_intf_map)) != STD_ERR_OK){
+                cps_api_object_set_return_code(obj,rc);
+                return false;
+            }
         }
     }
     else{
@@ -606,15 +614,17 @@ t_std_error nas_mirror_create_session(cps_api_object_t obj) {
         return STD_ERR(MIRROR,FAIL,0);
     }
 
-    if(!entry.update_src_intf_map(intf_map)){
+    t_std_error rc;
+    if(( rc = entry.update_src_intf_map(intf_map)) != STD_ERR_OK ){
+        cps_api_object_set_return_code(obj,rc);
         if(!entry.remove_src_intf()){
             NAS_MIRROR_LOG(ERR,"Failed to remove source ports while create failure "
                            "for Mirror Session");
-            return STD_ERR(MIRROR,FAIL,0);
+            return rc;
         }
         NAS_MIRROR_LOG(ERR,"Failed to Enable Mirroring on Source Ports");
         ndi_mirror_delete_session(entry.get_ndi_entry());
-        return STD_ERR(MIRROR,FAIL,0);
+        return rc;
     }
 
     dst_intf_set->insert(entry.get_dst_intf());
@@ -679,7 +689,11 @@ t_std_error nas_mirror_set_session(cps_api_object_t obj,nas_mirror_id_t id){
     std_mutex_simple_lock_guard lock(&nas_mirror_mutex);
     nas_mirror_entry orig_entry(entry);
     if(!(nas_mirror_fill_entry(obj,&entry,intf_map,true))){
+        const t_std_error *rc = cps_api_object_return_code(obj);
         entry = std::move(orig_entry);
+        if(rc != nullptr){
+             return *rc;
+        }
         return STD_ERR(MIRROR,FAIL,0);
     }
     return STD_ERR_OK;

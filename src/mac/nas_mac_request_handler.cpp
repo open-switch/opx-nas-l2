@@ -125,19 +125,6 @@ static t_std_error nas_mac_read_npu_notification(int fd, const size_t count,nas_
 }
 
 
-t_std_error nas_mac_lag_obj_id_get (hal_ifindex_t if_index, ndi_obj_id_t& obj_id)
-{
-    nas::ndi_obj_id_table_t tmp_ndi_oid_tbl;
-    if (dn_nas_lag_get_ndi_ids (if_index, &tmp_ndi_oid_tbl) != STD_ERR_OK) {
-        NAS_MAC_LOG(ERR,  "Lag object get failed for %d", if_index);
-        return STD_ERR(MAC,NEXIST,0);
-    }
-    /* TODO - Handle multiple NPU scenerio */
-    obj_id = tmp_ndi_oid_tbl[0];
-    return STD_ERR_OK;
-}
-
-
 t_std_error nas_mac_delete_entries_from_hw(nas_mac_entry_t *entry,
                                            ndi_mac_delete_type_t del_type,
                                            bool subtype_all) {
@@ -167,7 +154,7 @@ t_std_error nas_mac_delete_entries_from_hw(nas_mac_entry_t *entry,
         }
         if(intf_ctrl.int_type == nas_int_type_LAG)
         {
-           if(nas_mac_lag_obj_id_get(entry->ifindex, obj_id) == STD_ERR_OK)
+           if(nas_get_lag_id_from_if_index(entry->ifindex, &obj_id) == STD_ERR_OK)
            {
               ndi_mac_entry.ndi_lag_id = obj_id;
            }

@@ -195,7 +195,7 @@ static bool nas_mac_fill_ndi_entry(ndi_mac_entry_t & ndi_mac_entry,nas_mac_entry
 
         ndi_obj_id_t obj_id;
         if (intf_ctrl.int_type == nas_int_type_LAG) {
-            if (nas_mac_lag_obj_id_get(entry.ifindex, obj_id) == STD_ERR_OK) {
+            if (nas_get_lag_id_from_if_index(entry.ifindex, &obj_id) == STD_ERR_OK) {
                 ndi_mac_entry.ndi_lag_id = obj_id;
             }
         }
@@ -609,16 +609,23 @@ bool nas_get_mac_entry_from_ndi(nas_mac_entry_t & entry){
     interface_ctrl_t intf_ctrl;
     memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
 
+    if(ndi_entry.ndi_lag_id){
 
-    intf_ctrl.q_type = HAL_INTF_INFO_FROM_PORT;
-    intf_ctrl.npu_id = ndi_entry.port_info.npu_id;
-    intf_ctrl.port_id = ndi_entry.port_info.npu_port;
+    if (nas_get_lag_if_index(ndi_entry.ndi_lag_id,&entry.ifindex) != STD_ERR_OK) {
+            NAS_MAC_LOG(ERR,"Failed to get Lag ifindex for ndi lag id 0x%x",ndi_entry.ndi_lag_id);
+            return false;
+        }
+    } else {
+        intf_ctrl.q_type = HAL_INTF_INFO_FROM_PORT;
+        intf_ctrl.npu_id = ndi_entry.port_info.npu_id;
+        intf_ctrl.port_id = ndi_entry.port_info.npu_port;
 
-    if (dn_hal_get_interface_info(&intf_ctrl) != STD_ERR_OK) {
-        NAS_MAC_LOG(ERR, "NDI MAC Get interface failed.");
-        return false;
+        if (dn_hal_get_interface_info(&intf_ctrl) != STD_ERR_OK) {
+           NAS_MAC_LOG(ERR, "NDI MAC Get interface failed.");
+           return false;
+        }
+        entry.ifindex = intf_ctrl.if_index;
     }
-    entry.ifindex = intf_ctrl.if_index;
 
     return true;
 }

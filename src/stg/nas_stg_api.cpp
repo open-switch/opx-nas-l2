@@ -31,6 +31,8 @@
 #include "dell-base-stg.h"
 #include "cps_class_map.h"
 #include "cps_api_object_key.h"
+#include "nas_ndi_obj_id_table.h"
+#include "nas_if_utils.h"
 
 #include <string>
 #include <stdlib.h>
@@ -38,9 +40,6 @@
 
 /*@TODO update this value and get it from SAI when SAI STG is available */
 #define MAX_STG_ID 512
-
-// Maximum VLANs allowed per bridge
-static const int kernel_max_vlan_per_stg = 1;
 
 // Default switch id to be used for handling os requests */
 static const int default_switch_id = 0;
@@ -126,47 +125,62 @@ static bool nas_stg_intf_to_port(hal_ifindex_t ifindex, interface_ctrl_t *intf_c
 }
 
 
+static bool nas_update_lag_stp_state(nas_stg_entry_t * entry, interface_ctrl_t & lag_intf,
+                                     BASE_STG_INTERFACE_STATE_t state){
+
+    if(lag_intf.int_type != nas_int_type_LAG){
+        NAS_STG_LOG(ERR,"Interface type %d not supported to updated STG instance", lag_intf.int_type);
+        return false;
+    }
+
+    ndi_obj_id_t lag_id;
+    if(nas_get_lag_id_from_if_index(lag_intf.if_index,&lag_id) != STD_ERR_OK){
+        return false;
+    }
+
+
+    /*
+     * When a port gets added to a bridge by default its state is disabled, however in npu it
+     * should be forwarding. Similarly when bridge is deleted from kernel, it makes all ports
+     * disable in that bridge,in that case if npu port was not forwarding then make it forwarding.
+     */
+    if(state == BASE_STG_INTERFACE_STATE_DISABLED ) {
+        state = BASE_STG_INTERFACE_STATE_FORWARDING;
+    }
+
+
+    if (ndi_stg_set_stp_lag_state(lag_intf.npu_id,
+        entry->npu_to_stg_map.find(lag_intf.npu_id)->second, lag_id,state)
+        != STD_ERR_OK) {
+        return false;
+    }
+
+    entry->stp_states[lag_intf.if_index]=state;
+    NAS_STG_LOG(DEBUG,  "Updated the STP state to %d for interface index %d in " "STG Id %d",
+                state, lag_intf.if_index, entry->nas_stg_id);
+
+    return true;
+
+}
+
+
 static bool nas_update_stp_state(nas_stg_entry_t * entry, hal_ifindex_t ifindex,
                                                 BASE_STG_INTERFACE_STATE_t state) {
     interface_ctrl_t intf_ctrl;
     BASE_STG_INTERFACE_STATE_t stp_state;
-    nas_lag_port_list_t port_list = {ifindex};
-    nas_lag_port_list_t * members = nullptr;
 
     /*
      * Check if index is a LAG if it is then use the lag members to updates its stp state
      * otherwise use the normal physical interface index
      */
 
-    auto it = nas_lag_map->find(ifindex);
-    if( it == nas_lag_map->end()){
-        if (!nas_stg_intf_to_port(ifindex, &intf_ctrl)) {
-            return false;
-        }
-        /*
-         * If no member ports have been added still cache the state
-         */
-        if(intf_ctrl.int_type == nas_int_type_LAG){
-            entry->stp_states[ifindex]= state;
-            return true;
-        }
-        members = &port_list;
-    }else{
-        members = &(it->second);
-        entry->stp_states[ifindex]= state;
-    }
-
-    if(members == nullptr){
-        NAS_STG_LOG(ERR,"Member port list is null");
+    if (!nas_stg_intf_to_port(ifindex, &intf_ctrl)) {
         return false;
     }
-    // Iterate through the member in case of LAG
-    for(auto intf_it = members->begin(); intf_it != members->end(); ++intf_it){
-        NAS_STG_LOG(DEBUG,"Updating STP State for ifindex %d",*intf_it);
-        memset(&intf_ctrl,0,sizeof(intf_ctrl));
-        if (!nas_stg_intf_to_port(*intf_it, &intf_ctrl)) {
-            return false;
-        }
+
+    if(intf_ctrl.int_type == nas_int_type_LAG){
+       return nas_update_lag_stp_state(entry,intf_ctrl,state);
+    } else if( intf_ctrl.int_type == nas_int_type_PORT || intf_ctrl.int_type == nas_int_type_FC){
 
         //Receive the STP Port State from NPU
         if (ndi_stg_get_stp_port_state(intf_ctrl.npu_id,
@@ -183,10 +197,10 @@ static bool nas_update_stp_state(nas_stg_entry_t * entry, hal_ifindex_t ifindex,
          */
 
         if ((stp_state == BASE_STG_INTERFACE_STATE_BLOCKING)
-             && (state == BASE_STG_INTERFACE_STATE_DISABLED)) {
+                && (state == BASE_STG_INTERFACE_STATE_DISABLED)) {
             NAS_STG_LOG(DEBUG,  "Already Updated STP state to %d for interface %d",
                         state, ifindex);
-            continue;
+            return true;
         }
 
         /*
@@ -196,7 +210,7 @@ static bool nas_update_stp_state(nas_stg_entry_t * entry, hal_ifindex_t ifindex,
          */
         if(state == BASE_STG_INTERFACE_STATE_DISABLED ) {
             if(stp_state ==  BASE_STG_INTERFACE_STATE_FORWARDING){
-                continue;
+                return true;
             }
             else{
                 state = BASE_STG_INTERFACE_STATE_FORWARDING;
@@ -204,16 +218,19 @@ static bool nas_update_stp_state(nas_stg_entry_t * entry, hal_ifindex_t ifindex,
         }
 
         if (ndi_stg_set_stp_port_state(intf_ctrl.npu_id,
-            entry->npu_to_stg_map.find(intf_ctrl.npu_id)->second, intf_ctrl.port_id,state)
-            != STD_ERR_OK) {
+                entry->npu_to_stg_map.find(intf_ctrl.npu_id)->second, intf_ctrl.port_id,state)
+                != STD_ERR_OK) {
             return false;
         }
-        entry->stp_states[*intf_it]=state;
+        entry->stp_states[ifindex]=state;
         NAS_STG_LOG(DEBUG,  "Updated the STP state to %d for interface index %d in " "STG Id %d",
-                state, *intf_it, entry->nas_stg_id);
+            state, ifindex, entry->nas_stg_id);
+    }else{
+        NAS_STG_LOG(ERR,"Updating STG state for intf type %d not supported",intf_ctrl.int_type);
     }
     return true;
 }
+
 
 bool nas_create_stg_for_vlan(hal_vlan_id_t id,hal_ifindex_t bid){
 
@@ -1044,6 +1061,10 @@ t_std_error nas_stg_vlan_update(hal_vlan_id_t id,bool add,hal_ifindex_t bridge_i
             nas_stg_update_vlan_stp_state(entry,id);
             NAS_STG_LOG(DEBUG,"Added vlan id %d to default instance",id);
         }else{
+            auto sit = nas_stg_table->find(it->second);
+            if(sit == nas_stg_table->end()) return STD_ERR(STG,FAIL,0);
+            nas_stg_entry_t * entry = &(sit->second);
+            nas_stg_update_vlan_stp_state(entry,id);
             NAS_STG_LOG(DEBUG,"vlan id %d already part of instance %d",id,it->second);
         }
     }else{
