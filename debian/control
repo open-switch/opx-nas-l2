@@ -2,27 +2,28 @@ Source: opx-nas-l2
 Section: net
 Priority: optional
 Maintainer: Dell EMC <ops-dev@lists.openswitch.net>
-Build-Depends: debhelper (>= 9),dh-autoreconf,autotools-dev,libopx-common-dev (>= 1.3.0),
-               libopx-nas-common-dev (>= 4.3.0),libopx-cps-dev,libopx-logging-dev (>=2.0.0),
-               libopx-nas-linux-dev (>= 5.3.0),libopx-nas-ndi-dev (>= 3.19.0),opx-ndi-api-dev (>= 6.6.0)
+Build-Depends: debhelper (>= 9),dh-autoreconf,autotools-dev,libopx-common-dev (>= 1.4.0),
+               libopx-nas-common-dev (>= 6.1.0),libopx-cps-dev (>= 3.6.2),libopx-logging-dev (>= 2.1.0),
+               libopx-nas-linux-dev (>= 5.11.0),libopx-nas-ndi-dev (>= 3.26.0),opx-ndi-api-dev (>= 6.12.0)
 Standards-Version: 3.9.3
 Vcs-Browser: https://github.com/open-switch/opx-nas-l2
 Vcs-Git: https://github.com/open-switch/opx-nas-l2.git
 
 Package: libopx-nas-l2-1
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends},libopx-nas-common1,libopx-common1,libopx-cps1,libopx-logging1,libopx-nas-linux1,libopx-nas-ndi1
+Depends: ${shlibs:Depends}, ${misc:Depends},libopx-nas-common1 (>= 6.1.0),libopx-common1 (>= 1.4.0),libopx-cps1 (>= 3.6.2),
+        libopx-logging1 (>= 2.1.0),libopx-nas-linux1 (>= 5.11.0),libopx-nas-ndi1 (>= 3.26.0)
 Description: This package contains L2 Network abstraction features
 
 Package: libopx-nas-l2-dev
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends},libopx-common-dev (>= 1.3.0),libopx-nas-common-dev (>= 4.3.0),
-          libopx-cps-dev,libopx-logging-dev (>= 2.0.0),libopx-nas-linux-dev (>= 5.3.0),
-          libopx-nas-ndi-dev (>= 3.19.0),opx-ndi-api-dev (>= 6.6.0),libopx-nas-l2-1 (=${binary:Version}),
-          libopx-base-model-dev (>= 3.79.0)
+Depends: ${shlibs:Depends}, ${misc:Depends},libopx-common-dev (>= 1.4.0),libopx-nas-common-dev (>= 6.1.0),
+          libopx-cps-dev (>= 3.6.2),libopx-logging-dev (>= 2.1.0),libopx-nas-linux-dev (>= 5.11.0),
+          libopx-nas-ndi-dev (>= 3.26.0),opx-ndi-api-dev (>= 6.12.0),libopx-nas-l2-1 (=${binary:Version}),
+          libopx-base-model-dev (>= 3.109.0)
 Description: This package contains L2 Network abstraction features
 
 Package: opx-nas-l2
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, opx-cps, python-opx-cps
+Depends: ${shlibs:Depends}, ${misc:Depends}, opx-cps (>= 3.6.2), python-opx-cps (>= 3.6.2)
 Description: This package contains L2 Network abstraction features
