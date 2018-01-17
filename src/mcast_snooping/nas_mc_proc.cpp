@@ -67,6 +67,8 @@ enum class mc_oper_type_t
     STATUS
 };
 
+const hal_ifindex_t ALL_INTERFACES = static_cast<hal_ifindex_t>(-1);
+
 static const char* get_oper_type_name(mc_oper_type_t oper_type)
 {
     switch(oper_type) {
@@ -190,11 +192,11 @@ public:
     void push(const mc_snooping_msg_t& msg, bool sync = false)
     {
         std::unique_lock<std::mutex> lock{_mutex};
-        _pending_msg.push(msg);
-        _cond.notify_one();
+        _pending_msg.push({msg, sync});
+        _req_cond.notify_one();
         if (sync) {
             // wait for processing finish
-            _cond.wait(lock);
+            _ack_cond.wait(lock);
         }
     }
 
@@ -203,24 +205,26 @@ public:
         std::unique_lock<std::mutex> lock{_mutex};
         if (_pending_msg.empty()) {
             // check if there is pending msg
-            _cond.wait(lock, [this](){return !_pending_msg.empty();});
+            _req_cond.wait(lock, [this](){return !_pending_msg.empty();});
         }
     }
 
-    bool pop(mc_snooping_msg_t& msg)
+    bool pop(mc_snooping_msg_t& msg, bool& is_sync)
     {
         std::unique_lock<std::mutex> lock{_mutex};
         if (_pending_msg.empty()) {
             return false;
         }
-        msg = _pending_msg.front();
+        auto& q_item = _pending_msg.front();
+        msg = q_item.first;
+        is_sync = q_item.second;
         _pending_msg.pop();
         return true;
     }
 
     void proc_finish()
     {
-        _cond.notify_all();
+        _ack_cond.notify_one();
     }
 
 private:
@@ -228,10 +232,11 @@ private:
     ~nas_mc_msg_queue(){}
 
     // Queue to store messages pending for main thread to process
-    std::queue<mc_snooping_msg_t> _pending_msg;
+    std::queue<std::pair<mc_snooping_msg_t, bool>> _pending_msg;
 
     std::mutex _mutex;
-    std::condition_variable _cond;
+    std::condition_variable _req_cond;
+    std::condition_variable _ack_cond;
 };
 
 /**
@@ -376,6 +381,13 @@ void nas_mc_cleanup_interface(hal_ifindex_t ifindex)
 {
     pending_msg().push({mc_event_type_t::IGMP_MLD, 0, mc_oper_type_t::DELETE, true,
                         mc_msg_type_t::INTERFACE, ifindex, true}, true);
+}
+
+// API to delete all route entries for VLAN
+void nas_mc_cleanup_vlan(hal_vlan_id_t vlan_id)
+{
+    pending_msg().push({mc_event_type_t::IGMP_MLD, vlan_id, mc_oper_type_t::DELETE, true,
+                        mc_msg_type_t::INTERFACE, ALL_INTERFACES}, true);
 }
 
 struct mc_npu_port_t
@@ -531,6 +543,7 @@ t_std_error nas_mc_snooping::delete_intf_entries(npu_id_t npu_id, bool all_vlan,
         for (auto& route_info: route_list) {
             bool del_entry = false;
             auto mbr_it = route_info.second.host_member_list.find(ifindex);
+            auto rtr_mbr_it = route_info.second.router_member_list.find(ifindex);
             if (mbr_it != route_info.second.host_member_list.end()) {
                 rc = ndi_l2mc_group_delete_member(npu_id, mbr_it->second);
                 if (rc == STD_ERR_OK) {
@@ -540,6 +553,17 @@ t_std_error nas_mc_snooping::delete_intf_entries(npu_id_t npu_id, bool all_vlan,
                 } else {
                     NAS_MC_LOG_ERR("NAS-MC-PROC", "Failed to delete group host member");
                     ret_val = rc;
+                }
+            } else if ((mbr_it == route_info.second.host_member_list.end()) &&
+                       (rtr_mbr_it != route_info.second.router_member_list.end())) {
+                /* if port is not found in membership list check if it is mrouter
+                   port, if yes delete it */
+                NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Ifindex %d is mrouter in %s , delete it:",
+                                 ifindex, nas_mc_ip_to_string(route_info.first));
+                rc = ndi_l2mc_group_delete_member(npu_id, rtr_mbr_it->second);
+                if (rc != STD_ERR_OK) {
+                   NAS_MC_LOG_ERR("NAS-MC-PROC", "Failed to delete group mrouter member");
+                   ret_val = rc;
                 }
             } else if (!all_vlan) {
                 NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Ifindex %d not found in entry %s member list:",
@@ -643,6 +667,15 @@ bool nas_mc_snooping::update_needed(const mc_snooping_msg_t& msg_info)
         return false;
     }
 
+    if (msg_info.msg_type == mc_msg_type_t::INTERFACE && msg_info.ifindex == ALL_INTERFACES) {
+        if (msg_info.oper_type != mc_oper_type_t::DELETE) {
+            NAS_MC_LOG_ERR("NAS-MC-PROC",
+                           "Only delete is supported for VLAN update handling");
+            return false;
+        }
+        return true;
+    }
+
     mc_npu_port_t npu_port;
     t_std_error rc = ifindex_to_npu_port(msg_info.ifindex, npu_port);
     if (rc != STD_ERR_OK) {
@@ -722,7 +755,7 @@ bool nas_mc_snooping::update_needed(const mc_snooping_msg_t& msg_info)
     }
 
     NAS_MC_LOG_DEBUG("NAS-MC-PROC", "No need to update mrouter or entry of VLAN %d", itor->first);
-    NAS_MC_LOG_DEBUG("NAS-MC-PROC", "%s\n",
+    NAS_MC_LOG_DEBUG("NAS-MC-PROC", "\n%s\n",
                      dump_vlan_entries(0, msg_info.vlan_id).c_str());
     return false;
 }
@@ -742,13 +775,19 @@ void nas_mc_snooping::update(const mc_snooping_msg_t& msg_info)
         } else {
             _vlan_enabled[msg_info.vlan_id] = std::make_pair(msg_info.enable, msg_info.enable);
         }
-        if (!msg_info.enable) {
-            NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Flush cached entries for VLAN %d %s",
-                             msg_info.vlan_id,
-                             msg_info.req_type == mc_event_type_t::IGMP_MLD ? "IGMP and MLD" :
-                             (msg_info.req_type == mc_event_type_t::IGMP ? "IGMP" : "MLD"));
-            flush(msg_info.vlan_id, msg_info.req_type);
+
+        if (msg_info.enable) {
+            return;
         }
+    }
+
+    if ((msg_info.oper_type == mc_oper_type_t::STATUS && !msg_info.enable) ||
+        (msg_info.msg_type == mc_msg_type_t::INTERFACE && msg_info.ifindex == ALL_INTERFACES)) {
+        NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Flush cached %s snooping entries for VLAN %d",
+                         msg_info.req_type == mc_event_type_t::IGMP_MLD ? "IGMP and MLD" :
+                         (msg_info.req_type == mc_event_type_t::IGMP ? "IGMP" : "MLD"),
+                         msg_info.vlan_id);
+        flush(msg_info.vlan_id, msg_info.req_type);
         return;
     }
 
@@ -1056,16 +1095,24 @@ static inline nas_mc_snooping& cache()
 
 static t_std_error nas_mc_config_hw(mc_snooping_msg_t& msg_info)
 {
-    if (msg_info.oper_type == mc_oper_type_t::STATUS) {
-        if (msg_info.enable) {
+    if (msg_info.oper_type == mc_oper_type_t::STATUS ||
+        (msg_info.msg_type == mc_msg_type_t::INTERFACE && msg_info.ifindex == ALL_INTERFACES)) {
+        if (msg_info.oper_type == mc_oper_type_t::STATUS && msg_info.enable) {
             NAS_MC_LOG_DEBUG("NAS-MC-PROC-HW",
                              "Nothing to be done by NPU to enable multicast snooping");
         } else {
-            NAS_MC_LOG_DEBUG("NAS-MC-PROC-HW",
-                             "%s snooping for VLAN %d is disabled, all related multicast entries will be deleted from NPU",
-                              msg_info.req_type == mc_event_type_t::IGMP_MLD ? "IGMP and MLD" :
-                              (msg_info.req_type == mc_event_type_t::IGMP ? "IGMP" : "MLD"),
-                              msg_info.vlan_id);
+            if (msg_info.oper_type == mc_oper_type_t::STATUS) {
+                NAS_MC_LOG_DEBUG("NAS-MC-PROC-HW",
+                                 "%s snooping for VLAN %d is disabled, all related multicast entries will be deleted from NPU",
+                                  msg_info.req_type == mc_event_type_t::IGMP_MLD ? "IGMP and MLD" :
+                                  (msg_info.req_type == mc_event_type_t::IGMP ? "IGMP" : "MLD"),
+                                  msg_info.vlan_id);
+            } else {
+                NAS_MC_LOG_DEBUG("NAS-MC-PROC-HW", "Delete all %s snooping entries from NPU for VLAN %d",
+                                  msg_info.req_type == mc_event_type_t::IGMP_MLD ? "IGMP and MLD" :
+                                  (msg_info.req_type == mc_event_type_t::IGMP ? "IGMP" : "MLD"),
+                                  msg_info.vlan_id);
+            }
             t_std_error rc = cache().delete_vlan_entries(msg_info.vlan_id, msg_info.req_type);
             if (rc != STD_ERR_OK) {
                 // Log the error info and return success to continue to cache flushing
@@ -1257,9 +1304,11 @@ static int nas_mc_proc_snooping_msg(void)
 {
     mc_snooping_msg_t msg_info;
     while(true) {
+        bool is_sync = false;
         pending_msg().wait_for_msg();
-        while (pending_msg().pop(msg_info)) {
+        while (pending_msg().pop(msg_info, is_sync)) {
             NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Received Multicast message:");
+            NAS_MC_LOG_DEBUG("NAS-MC-PROC", "  Task Type      : %s", is_sync ? "SYNC" : "NON-SYNC");
             NAS_MC_LOG_DEBUG("NAS-MC-PROC", "  Event Type     : %s",
                              msg_info.req_type == mc_event_type_t::IGMP_MLD ? "IGMP_MLD" :
                              (msg_info.req_type == mc_event_type_t::IGMP ? "IGMP" : "MLD"));
@@ -1304,11 +1353,13 @@ static int nas_mc_proc_snooping_msg(void)
                     cache().update(msg_info);
                 }
             } else {
-                NAS_MC_LOG_INFO("NAS-MC-PROC", "Cache is not needed or could not be updated");
+                NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Cache is not needed or could not be updated");
+            }
+            if (is_sync) {
+                pending_msg().proc_finish();
             }
             NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Multicast message processing done");
         }
-        pending_msg().proc_finish();
     }
 
     return true;

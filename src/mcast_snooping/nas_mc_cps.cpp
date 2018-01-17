@@ -297,8 +297,15 @@ static cps_api_return_code_t nas_mc_cleanup_handler(void *context,
         attr = cps_api_object_attr_get(obj,
                                 BASE_L2_MCAST_CLEANUP_L2MC_MEMBER_INPUT_IFNAME);
         if (attr == nullptr) {
-            NAS_MC_LOG_ERR("NAS-MC-CPS-CLEANUP", "Either ifindex or ifname should be given");
-            return cps_api_ret_code_ERR;
+            attr = cps_api_object_attr_get(obj, BASE_L2_MCAST_CLEANUP_L2MC_MEMBER_INPUT_VLAN_ID);
+            if (attr == nullptr) {
+                NAS_MC_LOG_ERR("NAS-MC-CPS-CLEANUP", "Either ifindex, ifname or vlan_id should be given");
+                return cps_api_ret_code_ERR;
+            }
+            hal_vlan_id_t vlan_id = cps_api_object_attr_data_u32(attr);
+            NAS_MC_LOG_DEBUG("NAS-MC-CPS-CLEANUP", "Multicast entry cleanup for VLAN %d", vlan_id);
+            nas_mc_cleanup_vlan(vlan_id);
+            return cps_api_ret_code_OK;
         }
         const char *ifname = static_cast<const char*>(cps_api_object_attr_data_bin(attr));
         t_std_error rc = nas_mc_name_to_ifindex(ifname, ifindex);

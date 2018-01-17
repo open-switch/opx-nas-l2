@@ -55,6 +55,7 @@ void nas_mc_del_route(mc_event_type_t req_type, hal_vlan_id_t vlan_id,
                       hal_ip_addr_t group_addr, hal_ifindex_t ifindex);
 void nas_mc_cleanup_vlan_member(hal_vlan_id_t vlan_id, hal_ifindex_t ifindex);
 void nas_mc_cleanup_interface(hal_ifindex_t ifindex);
+void nas_mc_cleanup_vlan(hal_vlan_id_t vlan_id);
 
 #ifdef __cplusplus
 extern "C" {
