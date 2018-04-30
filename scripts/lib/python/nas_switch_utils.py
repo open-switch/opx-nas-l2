@@ -63,6 +63,11 @@ def print_switch_uft_info(uft_data, switch_mode):
             value = cps_object.types.from_data(key, uft_data[mode][key])
             print key + ' = ' +  str(value)
 
+def list_to_str(key, list_data):
+    value = cps_object.types.from_data(key, list_data[0])
+    for i in list_data[1:]:
+        value = value + ',' + str(cps_object.types.from_data(key, i))
+    return value
 
 def print_switch_details(args):
     switch_mode=['base-switch/switching-entities/switching-entity/switch-mode']
@@ -71,6 +76,8 @@ def print_switch_details(args):
         if isinstance(data, dict):
             ''' UFT mode information are stored as a dictionary '''
             print_switch_uft_info(data, switch_mode)
+        elif isinstance(data, list):
+            print key + ' = ' + list_to_str(key, data)
         else:
             value = cps_object.types.from_data(key,data)
             if key in switch_mode:
