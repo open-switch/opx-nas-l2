@@ -1,3 +1,12 @@
+opx-nas-l2 (1.21.0) unstable; urgency=medium
+
+  * Update: Support for setting multicast lookup key in VLAN
+  * Update: Add parameter to distinguish STG state update from OS vs NPU
+  * Feature: Support for Metaswitch IGMP MLD
+  * Bugfix: Multiple group list not getting cleared for group/route updates
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Thu, 24 May 2018 14:38:23 -0800
+
 opx-nas-l2 (1.17.0+opx3) unstable; urgency=medium
 
   * Update: Add compiler/linker hardening flags

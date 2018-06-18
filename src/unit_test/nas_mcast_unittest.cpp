@@ -33,6 +33,7 @@
 #include "std_ip_utils.h"
 #include <iostream>
 #include <string>
+#include <vector>
 #include <functional>
 #include <unordered_map>
 #include <stdio.h>
@@ -46,9 +47,17 @@ static const string ROUTE_IF_NAME_2{"e101-005-0"};
 static const string ROUTE_LAG_IF_NAME{"bond9"};
 static const string LAG_IF_NAME_1{"e101-003-0"};
 static const string LAG_IF_NAME_2{"e101-004-0"};
-static const string TEST_GROUP_IPV4{"225.0.0.3"};
-static const string TEST_GROUP_IPV6{"ff0e::1"};
-static const string MROUTER_IF_NAME{"e101-010-0"};
+static std::vector<std::string> TEST_NULL_LIST = {};
+static std::vector<std::string> TEST_GRP_IPV4 = {"228.0.0.8"};
+static std::vector<std::string> TEST_SRC_IPV4 = {"8.8.8.8"};
+static std::vector<std::string> TEST_GRP_IPV6 = {"ff0e::8888"};
+static std::vector<std::string> TEST_SRC_IPV6 = {"8888::8888"};
+static std::vector<std::string> TEST_GRP_IPV4_LIST = {"225.0.0.5", "225.0.0.6", "225.0.0.7"};
+static std::vector<std::string> TEST_SRC_IPV4_LIST = {"5.5.5.5", "6.6.6.6", "7.7.7.7"};
+static std::vector<std::string> TEST_GRP_IPV6_LIST = {"ff0e::5", "ff0e::6", "ff0e::7"};
+static std::vector<std::string> TEST_SRC_IPV6_LIST = {"5555::5555", "6666::6666", "7777::7777"};
+static const string IGMP_MROUTER_IF_NAME{"e101-010-0"};
+static const string MLD_MROUTER_IF_NAME{"e101-011-0"};
 static const uint_t IGMP_PROTO_ID = 2;
 static const string L2VLAN_TYPE{"ianaift:l2vlan"};
 static const string LAG_TYPE{"ianaift:ieee8023adLag"};
@@ -519,7 +528,8 @@ static bool event_service_deinit()
 }
 
 static bool send_mc_update_event(hal_vlan_id_t vlan_id, const string& if_name,
-                                 const string& group_ip,
+                                 std::vector<std::string> &group_ip,
+                                 std::vector<std::string> &src_ip,
                                  bool ipv4, bool mrouter, bool add)
 {
     bool event_start_internal;
@@ -539,7 +549,7 @@ static bool send_mc_update_event(hal_vlan_id_t vlan_id, const string& if_name,
             cout << "Failed to create cps object" << endl;
             break;
         }
-        cps_api_attr_id_t key_id, vlan_attr_id, mr_if_attr_id, rt_if_attr_id, grp_id, gip_attr_id;
+        cps_api_attr_id_t key_id, vlan_attr_id, mr_if_attr_id, rt_if_attr_id, grp_id, gip_attr_id, src_id, srcip_attr_id;
         if (ipv4) {
             key_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_IGMP_SNOOPING_VLANS_VLAN;
             vlan_attr_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_IGMP_SNOOPING_VLANS_VLAN_VLAN_ID;
@@ -547,6 +557,8 @@ static bool send_mc_update_event(hal_vlan_id_t vlan_id, const string& if_name,
             rt_if_attr_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_IGMP_SNOOPING_VLANS_VLAN_GROUP_INTERFACE;
             grp_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_IGMP_SNOOPING_VLANS_VLAN_GROUP;
             gip_attr_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_IGMP_SNOOPING_VLANS_VLAN_GROUP_ADDRESS;
+            src_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_IGMP_SNOOPING_VLANS_VLAN_GROUP_SOURCE;
+            srcip_attr_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_IGMP_SNOOPING_VLANS_VLAN_GROUP_SOURCE_ADDRESS;
         } else {
             key_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_MLD_SNOOPING_VLANS_VLAN;
             vlan_attr_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_MLD_SNOOPING_VLANS_VLAN_VLAN_ID;
@@ -554,6 +566,8 @@ static bool send_mc_update_event(hal_vlan_id_t vlan_id, const string& if_name,
             rt_if_attr_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_MLD_SNOOPING_VLANS_VLAN_GROUP_INTERFACE;
             grp_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_MLD_SNOOPING_VLANS_VLAN_GROUP;
             gip_attr_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_MLD_SNOOPING_VLANS_VLAN_GROUP_ADDRESS;
+            src_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_MLD_SNOOPING_VLANS_VLAN_GROUP_SOURCE;
+            srcip_attr_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_MLD_SNOOPING_VLANS_VLAN_GROUP_SOURCE_ADDRESS;
         }
         cps_api_object_guard og(obj);
         if (!cps_api_key_from_attr_with_qual(cps_api_object_key(obj), key_id,
@@ -570,15 +584,24 @@ static bool send_mc_update_event(hal_vlan_id_t vlan_id, const string& if_name,
                 break;
             }
         } else {
-            cps_api_attr_id_t ids[3] = {grp_id, 0, rt_if_attr_id};
-            if (!cps_api_object_e_add(obj, ids, 3, cps_api_object_ATTR_T_BIN, if_name.c_str(), if_name.size() + 1)) {
-                cout << "Failed to set mc entry interface name" << endl;
-                break;
-            }
-            ids[2] = gip_attr_id;
-            if (!cps_api_object_e_add(obj, ids, 3, cps_api_object_ATTR_T_BIN, group_ip.c_str(), group_ip.size() + 1)) {
-                cout << "Failed to set mc entry group IP address" << endl;
-                break;
+            for (cps_api_attr_id_t g = 0; g < group_ip.size();g++) {
+                cps_api_attr_id_t ids[3] = {grp_id, g, rt_if_attr_id};
+                if (!cps_api_object_e_add(obj, ids, 3, cps_api_object_ATTR_T_BIN, if_name.c_str(), if_name.size() + 1)) {
+                    cout << "Failed to set mc entry interface name" << endl;
+                    break;
+                }
+                ids[2] = gip_attr_id;
+                if (!cps_api_object_e_add(obj, ids, 3, cps_api_object_ATTR_T_BIN, group_ip[g].c_str(), group_ip[g].size() + 1)) {
+                    cout << "Failed to set mc entry group IP address" << endl;
+                    break;
+                }
+                for (cps_api_attr_id_t i = 0; i < src_ip.size();i++) {
+                    cps_api_attr_id_t srcip_ids[5] = {grp_id, g, src_id, i,srcip_attr_id};
+                    if (!cps_api_object_e_add(obj, srcip_ids, 5, cps_api_object_ATTR_T_BIN, src_ip[i].c_str(), src_ip[i].size() + 1)) {
+                        cout << "Failed to set mc entry src IP address" << endl;
+                        break;
+                    }
+                }
             }
         }
         if (cps_api_event_publish(evt_handle, obj) != cps_api_ret_code_OK) {
@@ -891,7 +914,7 @@ TEST(nas_mc, create_lag_and_member)
 TEST(nas_mc, create_vlan_and_member)
 {
     string br_name{};
-    vector<string> member_list{ROUTE_IF_NAME_1, ROUTE_IF_NAME_2, MROUTER_IF_NAME, ROUTE_LAG_IF_NAME};
+    vector<string> member_list{ROUTE_IF_NAME_1, ROUTE_IF_NAME_2, IGMP_MROUTER_IF_NAME, MLD_MROUTER_IF_NAME,ROUTE_LAG_IF_NAME};
     if (!check_vlan_exists(TEST_VID, br_name)) {
         ASSERT_TRUE(set_vlan_or_lag_with_member(intf_type::VLAN, {},
                                                 member_list,
@@ -915,19 +938,32 @@ TEST(nas_mc, init_event_service)
 
 TEST(nas_mc, send_mrouter_add_event)
 {
-    ASSERT_TRUE(send_mc_update_event(TEST_VID, MROUTER_IF_NAME, {}, true, true, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, IGMP_MROUTER_IF_NAME, TEST_NULL_LIST, TEST_NULL_LIST, true, true, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, MLD_MROUTER_IF_NAME, TEST_NULL_LIST, TEST_NULL_LIST, false, true, true));
 }
 
 TEST(nas_mc, send_ipv4_route_add_event)
 {
-    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_1, TEST_GROUP_IPV4, true, false, true));
-    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GROUP_IPV4, true, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_1, TEST_GRP_IPV4, TEST_NULL_LIST,true, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV4,TEST_NULL_LIST, true, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_1, TEST_GRP_IPV4, TEST_SRC_IPV4,true, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV4, TEST_SRC_IPV4,true, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_1, TEST_GRP_IPV4, TEST_SRC_IPV4_LIST,true, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV4, TEST_SRC_IPV4_LIST,true, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_1, TEST_GRP_IPV4_LIST, TEST_SRC_IPV4_LIST,true, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV4_LIST, TEST_SRC_IPV4_LIST,true, false, true));
 }
 
 TEST(nas_mc, send_ipv6_route_add_event)
 {
-    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_2, TEST_GROUP_IPV6, false, false, true));
-    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GROUP_IPV6, false, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_2, TEST_GRP_IPV6,TEST_NULL_LIST, false, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV6,TEST_NULL_LIST, false, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_2, TEST_GRP_IPV6,TEST_SRC_IPV6, false, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV6,TEST_SRC_IPV6, false, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_2, TEST_GRP_IPV6,TEST_SRC_IPV6_LIST, false, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV6,TEST_SRC_IPV6_LIST, false, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_2, TEST_GRP_IPV6_LIST,TEST_SRC_IPV6_LIST, false, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV6_LIST,TEST_SRC_IPV6_LIST, false, false, true));
 }
 
 TEST(nas_mc, validate_igmp_entry)
@@ -956,19 +992,32 @@ TEST(nas_mc, validate_mld_entry)
 
 TEST(nas_mc, send_ipv4_route_del_event)
 {
-    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_1, TEST_GROUP_IPV4, true, false, false));
-    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GROUP_IPV4, true, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_1, TEST_GRP_IPV4,TEST_NULL_LIST, true, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV4,TEST_NULL_LIST, true, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_1, TEST_GRP_IPV4, TEST_SRC_IPV4,true, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV4, TEST_SRC_IPV4,true, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_1, TEST_GRP_IPV4, TEST_SRC_IPV4_LIST,true, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV4, TEST_SRC_IPV4_LIST,true, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_1, TEST_GRP_IPV4_LIST, TEST_SRC_IPV4_LIST,true, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV4_LIST, TEST_SRC_IPV4_LIST,true, false, false));
 }
 
 TEST(nas_mc, send_ipv6_route_del_event)
 {
-    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_2, TEST_GROUP_IPV6, false, false, false));
-    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GROUP_IPV6, false, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_2, TEST_GRP_IPV6,TEST_NULL_LIST, false, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV6,TEST_NULL_LIST, false, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_2, TEST_GRP_IPV6,TEST_SRC_IPV6, false, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV6,TEST_SRC_IPV6, false, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_2, TEST_GRP_IPV6,TEST_SRC_IPV6_LIST, false, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV6,TEST_SRC_IPV6_LIST, false, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_IF_NAME_2, TEST_GRP_IPV6_LIST,TEST_SRC_IPV6_LIST, false, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, ROUTE_LAG_IF_NAME, TEST_GRP_IPV6_LIST,TEST_SRC_IPV6_LIST, false, false, false));
 }
 
 TEST(nas_mc, send_mrouter_del_event)
 {
-    ASSERT_TRUE(send_mc_update_event(TEST_VID, MROUTER_IF_NAME, {}, true, true, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, IGMP_MROUTER_IF_NAME, TEST_NULL_LIST, TEST_NULL_LIST, true, true, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, MLD_MROUTER_IF_NAME, TEST_NULL_LIST, TEST_NULL_LIST, false, true, false));
 }
 
 TEST(nas_mc, deinit_event_service)

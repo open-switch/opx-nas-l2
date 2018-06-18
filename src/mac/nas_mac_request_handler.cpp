@@ -28,6 +28,9 @@
 
 #include <unistd.h>
 #include <vector>
+#include <mutex>
+#include <condition_variable>
+
 
 static auto nas_mac_request_queue = new nas_mac_cps_event_queue_t;
 static auto mac_delete_queue = new nas_mac_cps_event_queue_t;
@@ -45,7 +48,9 @@ static const unsigned int nas_mac_max_connect_retries = 100;
 static size_t vlan_flush_count =0;
 static size_t port_flush_count =0;
 static size_t port_vlan_flush_count  = 0;
-
+static std::condition_variable _cv;
+static std::mutex _mtx;
+static bool _server_ready = false;
 
 
 static auto port_flush_queue = new std::unordered_map <hal_ifindex_t, nas_mac_cps_event_t>;
@@ -79,10 +84,10 @@ nas_mac_npu_event_queue_t & nas_mac_get_npu_event_queue(){
 }
 
 void nas_mac_flush_count_dump(void){
-    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Port flush count %d",port_flush_count);
-    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","vlan flush count %d",vlan_flush_count);
-    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Port vlan flush count %d",port_vlan_flush_count);
-    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Total flush count %d",(port_flush_count+vlan_flush_count+port_vlan_flush_count));
+    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Port flush count %lu",port_flush_count);
+    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","vlan flush count %lu",vlan_flush_count);
+    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Port vlan flush count %lu",port_vlan_flush_count);
+    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Total flush count %lu",(port_flush_count+vlan_flush_count+port_vlan_flush_count));
 }
 
 static t_std_error nas_mac_read_cps_notification(int fd, const size_t count,nas_mac_cps_event_queue_t & flush_list){
@@ -304,7 +309,7 @@ static void nas_mac_process_pending_events(int server_fd){
 
     if(FD_ISSET(server_fd,&mac_fd_set)){
         if((event_fd[client_count] = accept(server_fd,NULL,NULL)) >= 0){
-            if(event_fd[client_count] > server_fd){
+            if(event_fd[client_count] > max_sock_fd){
                 max_sock_fd = event_fd[client_count];
             }
 
@@ -323,6 +328,11 @@ static void nas_mac_process_pending_events(int server_fd){
 
 
 t_std_error nas_mac_connect_to_master_thread(int * client_fd){
+
+    std::unique_lock<std::mutex> _lk(_mtx);
+    while(!_server_ready){
+        _cv.wait(_lk);
+    }
 
     std_socket_address_t client_sock;
     client_sock.type = e_std_sock_UNIX;
@@ -352,13 +362,21 @@ void nas_l2_mac_req_handler(void){
     server_socket.address.type = e_std_sock_UNIX;
     strncpy(server_socket.address.address.str,mac_socket_path,sizeof(server_socket.address.address.str)-1);
 
+    {
+
+    std::lock_guard<std::mutex> _lk(_mtx);
 
     if(std_server_socket_create(&server_socket) != STD_ERR_OK){
         NAS_MAC_LOG(ERR,"Failed to create socket for MAC server thread");
         return;
     }
 
+    _server_ready = true;
+    _cv.notify_all();
+
+    }
     max_sock_fd = server_socket.socket;
+
 
     FD_ZERO (&mac_fd_set);
     FD_ZERO (&mac_master_fd_set);

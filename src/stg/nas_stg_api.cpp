@@ -139,16 +139,6 @@ static bool nas_update_lag_stp_state(nas_stg_entry_t * entry, interface_ctrl_t &
     }
 
 
-    /*
-     * When a port gets added to a bridge by default its state is disabled, however in npu it
-     * should be forwarding. Similarly when bridge is deleted from kernel, it makes all ports
-     * disable in that bridge,in that case if npu port was not forwarding then make it forwarding.
-     */
-    if(state == BASE_STG_INTERFACE_STATE_DISABLED ) {
-        state = BASE_STG_INTERFACE_STATE_FORWARDING;
-    }
-
-
     if (ndi_stg_set_stp_lag_state(lag_intf.npu_id,
         entry->npu_to_stg_map.find(lag_intf.npu_id)->second, lag_id,state)
         != STD_ERR_OK) {
@@ -203,19 +193,6 @@ static bool nas_update_stp_state(nas_stg_entry_t * entry, hal_ifindex_t ifindex,
             return true;
         }
 
-        /*
-         * When a port gets added to a bridge by default its state is disabled, however in npu it
-         * should be forwarding. Similarly when bridge is deleted from kernel, it makes all ports
-         * disable in that bridge,in that case if npu port was not forwarding then make it forwarding.
-         */
-        if(state == BASE_STG_INTERFACE_STATE_DISABLED ) {
-            if(stp_state ==  BASE_STG_INTERFACE_STATE_FORWARDING){
-                return true;
-            }
-            else{
-                state = BASE_STG_INTERFACE_STATE_FORWARDING;
-            }
-        }
 
         if (ndi_stg_set_stp_port_state(intf_ctrl.npu_id,
                 entry->npu_to_stg_map.find(intf_ctrl.npu_id)->second, intf_ctrl.port_id,state)
@@ -963,7 +940,7 @@ t_std_error nas_stg_create_default_instance() {
 
     auto npu_it = switch_to_npu_map->begin();
     if (npu_it == switch_to_npu_map->end()) {
-        NAS_STG_LOG(ERR, "No switch ID %d exist");
+        NAS_STG_LOG(ERR, "No switch ID exist");
         return STD_ERR(STG, NEXIST, 0);
     }
 
@@ -1171,7 +1148,7 @@ static bool nas_stg_lag_set(hal_ifindex_t lag_index, cps_api_object_t obj){
             }
             break;
         default :
-            NAS_STG_LOG(DEBUG,"Unknown Attribute %d for LAG",
+            NAS_STG_LOG(DEBUG,"Unknown Attribute %lu for LAG",
                         cps_api_object_attr_id(obj_it.attr));
             break;
         }
@@ -1327,6 +1304,6 @@ t_std_error nas_stg_set_interface_default_state(npu_id_t npu,port_t port){
     }else{
         return STD_ERR(STG,FAIL,0);
     }
-    EV_LOGGING(NAS_L2,DEBUG,"NAS-STG","Set the port state for %d to %d in default state %d",port,default_stg_state);
+    EV_LOGGING(NAS_L2,DEBUG,"NAS-STG","Set the port state for %d to %d in default state",port,default_stg_state);
     return STD_ERR_OK;
 }

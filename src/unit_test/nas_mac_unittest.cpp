@@ -36,7 +36,7 @@
 #include <stdlib.h>
 #include <net/if.h>
 #include <map>
-
+#include <string>
 using namespace std;
 
 enum del_filter {
@@ -84,7 +84,7 @@ typedef struct mac_struct_ {
 } mac_struct_t;
 
 
-bool nas_mac_vlan_create(){
+bool nas_mac_vlan_create(bool del){
 
     for(unsigned int ix = 2 ; ix < 100 ; ++ix){
         cps_api_object_t obj = cps_api_object_create();
@@ -106,7 +106,13 @@ bool nas_mac_vlan_create(){
         cps_api_transaction_params_t tr;
         if ( cps_api_transaction_init(&tr) != cps_api_ret_code_OK ) return false;
 
-        if(!nas_mac_exec_transaction(std::string("create"),&tr,obj)) return false;
+        std::string s = del ? "delete" : "create";
+
+        if(del){
+            std::string s = std::string("br")+std::to_string(ix);
+            cps_api_object_attr_add(obj,IF_INTERFACES_INTERFACE_NAME,s.c_str(),sizeof(s)+1);
+        }
+        if(!nas_mac_exec_transaction(s,&tr,obj)) return false;
     }
     return true;
 }
@@ -222,13 +228,10 @@ bool nas_mac_flush_test(bool vlan,bool ifindex){
     }
 
     if (ifindex) {
-        int ifidx;
-        ids[2]=BASE_MAC_FLUSH_INPUT_FILTER_IFINDEX;
-        for(unsigned int ix=0; ix<3; ++ix){
-            ids[1]=ix;
-            std::cout<<"Enter the ifindex"<<std::endl;
-            std::cin>>ifidx;
-            cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U16,&(ifidx),sizeof(ifidx));
+        ids[2]=BASE_MAC_FLUSH_INPUT_FILTER_IFNAME;
+        for(unsigned int ix=1; ix<4; ++ix){
+            std::string if_name = "e101-00"+ std::to_string(ix)+ "-0";
+            cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_BIN,if_name.c_str(),if_name.size()+1);
         }
     }
 
@@ -310,7 +313,7 @@ bool nas_mac_auto_flush_management(bool enable){
 TEST(cps_api_events,mac_test) {
 
     cout<<"VLAN Create"<<endl;
-    ASSERT_TRUE(nas_mac_vlan_create());
+    ASSERT_TRUE(nas_mac_vlan_create(false));
 
     cout<<"MAC create"<<endl;
     ASSERT_TRUE(nas_mac_create_test());
@@ -343,91 +346,10 @@ TEST(cps_api_events,mac_test) {
     cout<<"Bulk Flush Test"<<endl;
     ASSERT_TRUE(nas_mac_bulk_flush_test());
 
+    cout<<"VLAN Delete"<<endl;
+    ASSERT_TRUE(nas_mac_vlan_create(true));
+
 }
-
-static void mac_dump_flush_obj(cps_api_object_t obj, const cps_api_object_it_t & it){
-     cps_api_object_it_t it_lvl_1 = it;
-
-     for (cps_api_object_it_inside (&it_lvl_1); cps_api_object_it_valid (&it_lvl_1);
-             cps_api_object_it_next (&it_lvl_1)) {
-
-         cps_api_object_it_t it_lvl_2 = it_lvl_1;
-
-         for (cps_api_object_it_inside (&it_lvl_2); cps_api_object_it_valid (&it_lvl_2);
-                 cps_api_object_it_next (&it_lvl_2)) {
-
-             switch(cps_api_object_attr_id(it_lvl_2.attr)){
-             case BASE_MAC_FLUSH_EVENT_FILTER_MEMBER_IFINDEX:
-                 std::cout<<"Member port index "<<cps_api_object_attr_data_u32(it_lvl_2.attr)<<std::endl;
-                 break;
-
-             case BASE_MAC_FLUSH_EVENT_FILTER_IFINDEX:
-                 std::cout<<"Port index "<<cps_api_object_attr_data_u32(it_lvl_2.attr)<<std::endl;
-                 break;
-
-             case BASE_MAC_FLUSH_EVENT_FILTER_VLAN:
-                 std::cout<<"Vlan id "<<cps_api_object_attr_data_u16(it_lvl_2.attr)<<std::endl;
-                 break;
-
-             default:
-                 break;
-             }
-         }
-     }
-}
-
-static bool mac_event_cb(cps_api_object_t obj, void *param)
-{
-
-     cps_api_object_it_t it;
-     cps_api_object_it_begin(obj,&it);
-
-        for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
-            int id = (int) cps_api_object_attr_id(it.attr);
-            switch(id) {
-                case BASE_MAC_FLUSH_EVENT_FILTER:
-                    mac_dump_flush_obj(obj,it);
-                    break;
-                default:
-                    break;
-            }
-        }
-    return true;
-}
-
-TEST(std_nas_mac_events, mac_flush_events)
-{
-
-    cps_api_event_reg_t reg;
-    memset(&reg,0,sizeof(reg));
-
-    if (cps_api_event_service_init() != cps_api_ret_code_OK) {
-        printf("***ERROR*** cps_api_event_service_init() failed\n");
-        return ;
-    }
-
-    if (cps_api_event_thread_init() != cps_api_ret_code_OK) {
-        printf("***ERROR*** cps_api_event_thread_init() failed\n");
-        return;
-    }
-
-    cps_api_key_t key;
-
-    cps_api_key_from_attr_with_qual(&key,BASE_MAC_FLUSH_EVENT_OBJ ,
-            cps_api_qualifier_OBSERVED);
-
-    reg.number_of_objects = 1;
-    reg.objects = &key;
-
-    if (cps_api_event_thread_reg(&reg,mac_event_cb,NULL)!=cps_api_ret_code_OK) {
-        std::cout << " registration failure"<<std::endl;
-        return;
-    }
-
-    while(1);
-    // infinite loop
-}
-
 
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);

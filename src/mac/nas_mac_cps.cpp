@@ -723,8 +723,27 @@ t_std_error nas_mac_reg_vlan_event (void) {
 
 t_std_error nas_mac_init(cps_api_operation_handle_t handle) {
 
-    t_std_error rc = STD_ERR_OK;
+    std_thread_create_param_t nas_l2_mac_req_handler_thr;
+    std_thread_init_struct(&nas_l2_mac_req_handler_thr);
+    nas_l2_mac_req_handler_thr.name = "nas-l2-mac-req-handler";
+    nas_l2_mac_req_handler_thr.thread_function = (std_thread_function_t)nas_l2_mac_req_handler;
 
+    if (std_thread_create(&nas_l2_mac_req_handler_thr)!=STD_ERR_OK) {
+        NAS_MAC_LOG(ERR, "Error creating nas mac request thread");
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+    if(nas_mac_connect_to_master_thread(&npu_thread_fd) != STD_ERR_OK){
+        NAS_MAC_LOG(ERR,"Failed to connect to master thread");
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+    if(nas_mac_connect_to_master_thread(&cps_thread_fd) != STD_ERR_OK){
+        NAS_MAC_LOG(ERR,"Failed to conenct to master thread");
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+    t_std_error rc;
     cps_api_event_reg_t reg;
     memset(&reg,0,sizeof(reg));
 
@@ -756,20 +775,5 @@ t_std_error nas_mac_init(cps_api_operation_handle_t handle) {
         return rc;
     }
 
-    std_thread_create_param_t nas_l2_mac_req_handler_thr;
-    std_thread_init_struct(&nas_l2_mac_req_handler_thr);
-    nas_l2_mac_req_handler_thr.name = "nas-l2-mac-req-handler";
-    nas_l2_mac_req_handler_thr.thread_function = (std_thread_function_t)nas_l2_mac_req_handler;
-
-    if (std_thread_create(&nas_l2_mac_req_handler_thr)!=STD_ERR_OK) {
-        NAS_MAC_LOG(ERR, "Error creating nas mac request thread");
-        return STD_ERR(MAC,FAIL,0);
-    }
-
-    if(nas_mac_connect_to_master_thread(&npu_thread_fd) != STD_ERR_OK){
-        NAS_MAC_LOG(ERR,"Failed to connect to master thread");
-        return STD_ERR(MAC,FAIL,0);
-    }
-
-    return nas_mac_connect_to_master_thread(&cps_thread_fd);
+    return rc;
 }

@@ -50,9 +50,9 @@ void nas_mc_change_snooping_status(mc_event_type_t req_type, hal_vlan_id_t vlan_
 void nas_mc_add_mrouter(mc_event_type_t req_type, hal_vlan_id_t vlan_id, hal_ifindex_t ifindex);
 void nas_mc_del_mrouter(mc_event_type_t req_type, hal_vlan_id_t vlan_id, hal_ifindex_t ifindex);
 void nas_mc_add_route(mc_event_type_t req_type, hal_vlan_id_t vlan_id,
-                      hal_ip_addr_t group_addr, hal_ifindex_t ifindex);
+                      hal_ip_addr_t group_addr, bool is_xg, hal_ip_addr_t src_addr, hal_ifindex_t ifindex);
 void nas_mc_del_route(mc_event_type_t req_type, hal_vlan_id_t vlan_id,
-                      hal_ip_addr_t group_addr, hal_ifindex_t ifindex);
+                      hal_ip_addr_t group_addr, bool is_xg, hal_ip_addr_t src_addr, hal_ifindex_t ifindex);
 void nas_mc_cleanup_vlan_member(hal_vlan_id_t vlan_id, hal_ifindex_t ifindex);
 void nas_mc_cleanup_interface(hal_ifindex_t ifindex);
 void nas_mc_cleanup_vlan(hal_vlan_id_t vlan_id);
