@@ -277,7 +277,7 @@ t_std_error nas_sflow_create_session(cps_api_object_t obj){
     }
 
     if(!nas_sflow_update_direction(&nas_sflow_entry.ndi_sflow_entry,true)){
-        NAS_SFLOW_LOG(ERR,"Failed to add source ports to session %llu ",
+        NAS_SFLOW_LOG(ERR,"Failed to add source ports to session %lu",
                       nas_sflow_entry.ndi_sflow_entry.ndi_sflow_id);
         ndi_sflow_delete_session(&nas_sflow_entry.ndi_sflow_entry);
         return STD_ERR(SFLOW,FAIL,0);

@@ -226,6 +226,7 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_INGRESS_BUFFER_POOL_NUM:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_EGRESS_BUFFER_POOL_NUM:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_COUNTER_REFRESH_INTERVAL:
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECN_ECT_THRESHOLD_ENABLE:
 
                 if (ndi_switch_get_attribute(*npus,
                             (BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t)*attr_it,
@@ -482,6 +483,7 @@ static const auto   _set_attr_handlers = new std::unordered_map<cps_api_attr_id_
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_DEFAULT_MAC_ADDRESS, _set_generic_mac },
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_PROFILE, nas_set_profile },
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE, nas_set_uft_mode },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECN_ECT_THRESHOLD_ENABLE, _set_generic_u32 },
 };
 
 
@@ -497,7 +499,7 @@ static void remove_same_values(cps_api_object_t now, cps_api_object_t req) {
         if ((id == BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_ECMP_ENTRY_PER_GROUP) ||
             (id == BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_PROFILE) ||
             (id == BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE)) continue;
- 
+
         if (_set_attr_handlers->find(id)==_set_attr_handlers->end()) continue;
 
         cps_api_object_attr_t new_val = cps_api_object_e_get(req,&id,1);

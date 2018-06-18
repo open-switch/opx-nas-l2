@@ -337,6 +337,7 @@ static inline bool nas_mirror_validate_erspan_attr(nas::attr_set_t &attrs){
 
 static bool nas_mirror_update_attrs(nas_mirror_entry *entry, nas::attr_set_t & attrs){
     for(auto attr_id: attrs){
+        if(attr_id == BASE_MIRROR_ENTRY_INTF) continue;
         if(ndi_mirror_update_session(entry->get_ndi_entry(),(BASE_MIRROR_ENTRY_t)attr_id) != STD_ERR_OK){
             return false;
         }
@@ -529,13 +530,15 @@ static bool nas_mirror_fill_entry(cps_api_object_t obj,nas_mirror_entry *entry
             break;
 
         case BASE_MIRROR_ENTRY_INTF:
-            if (!update)
-                attrs.add(BASE_MIRROR_ENTRY_INTF);
+            attrs.add(BASE_MIRROR_ENTRY_INTF);
+
+            if(update && (!cps_api_object_attr_len(it.attr))){
+                 continue;
+            }
 
             dst_intf = entry->get_dst_intf();
             if (!get_src_intf_attr(obj, new_intf_map, it, update, dst_intf))
                 return false;
-
             break;
 
         case BASE_MIRROR_ENTRY_FLOW_ENABLED :
@@ -556,11 +559,17 @@ static bool nas_mirror_fill_entry(cps_api_object_t obj,nas_mirror_entry *entry
 
     if(update){
         if(!nas_mirror_update_attrs(entry,attrs)) return false;
-        if(new_intf_map.size() > 0){
-            t_std_error rc;
-            if(( rc = entry->update_src_intf_map(new_intf_map)) != STD_ERR_OK){
-                cps_api_object_set_return_code(obj,rc);
-                return false;
+        if(attrs.contains(BASE_MIRROR_ENTRY_INTF)){
+            if(new_intf_map.size()){
+                t_std_error rc;
+                if(( rc = entry->update_src_intf_map(new_intf_map)) != STD_ERR_OK){
+                    cps_api_object_set_return_code(obj,rc);
+                    return false;
+                }
+            }else{
+                if(!entry->remove_src_intf()){
+                    return false;
+                }
             }
         }
     }

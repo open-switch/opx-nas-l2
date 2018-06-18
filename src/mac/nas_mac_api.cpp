@@ -566,7 +566,7 @@ void nas_mac_event_notification_cb(npu_id_t npu_id, ndi_mac_event_type_t ev_type
         mac_event.entry.ifindex = intf_ctrl.if_index;
     } else {
         if (nas_get_lag_if_index(mac_entry->ndi_lag_id,&lag_index) != STD_ERR_OK) {
-            NAS_MAC_LOG(ERR,"Failed to get Lag ifindex for ndi lag id 0x%x",mac_entry->ndi_lag_id);
+            NAS_MAC_LOG(ERR,"Failed to get Lag ifindex for ndi lag id 0x%lx",mac_entry->ndi_lag_id);
             return;
         }
         mac_event.entry.ifindex = lag_index;
@@ -612,7 +612,7 @@ bool nas_get_mac_entry_from_ndi(nas_mac_entry_t & entry){
     if(ndi_entry.ndi_lag_id){
 
     if (nas_get_lag_if_index(ndi_entry.ndi_lag_id,&entry.ifindex) != STD_ERR_OK) {
-            NAS_MAC_LOG(ERR,"Failed to get Lag ifindex for ndi lag id 0x%x",ndi_entry.ndi_lag_id);
+            NAS_MAC_LOG(ERR,"Failed to get Lag ifindex for ndi lag id 0x%lx",ndi_entry.ndi_lag_id);
             return false;
         }
     } else {

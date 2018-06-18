@@ -39,6 +39,8 @@
 #include <inttypes.h>
 #include <sstream>
 
+#define TAG_PRINT_BUF_LEN   256
+
 /**
  * Data structure related to message decoded from
  * event and used by main thread for configuring
@@ -95,6 +97,13 @@ static const char* get_msg_type_name(mc_msg_type_t msg_type)
     return "";
 }
 
+struct mc_entry_key_t
+{
+    hal_ip_addr_t dst_ip;
+    bool is_xg;
+    hal_ip_addr_t src_ip;
+};
+
 struct _ip_addr_key_hash
 {
     size_t operator()(const hal_ip_addr_t& key) const {
@@ -105,6 +114,18 @@ struct _ip_addr_key_hash
             for (int idx = 0; idx < HAL_INET6_LEN; idx ++) {
                 hash ^= (std::hash<unsigned char>()(key.u.ipv6.s6_addr[idx]) << (idx + 1));
             }
+        }
+        return hash;
+    }
+};
+
+struct _mc_entry_key_hash
+{
+    size_t operator()(const mc_entry_key_t& key) const {
+        size_t hash = _ip_addr_key_hash()(key.dst_ip);
+        hash ^= (std::hash<bool>()(key.is_xg) << 1);
+        if (!key.is_xg) {
+            hash ^= (_ip_addr_key_hash()(key.src_ip) << 1);
         }
         return hash;
     }
@@ -125,11 +146,40 @@ struct _ip_addr_key_equal
     }
 };
 
+struct _mc_entry_key_equal
+{
+    bool operator()(const mc_entry_key_t& k1, const mc_entry_key_t& k2) const
+    {
+        if (!_ip_addr_key_equal()(k1.dst_ip, k2.dst_ip)) {
+            return false;
+        }
+        if (k1.is_xg != k2.is_xg) {
+            return false;
+        }
+        if (!k1.is_xg) {
+            return _ip_addr_key_equal()(k1.src_ip, k2.src_ip);
+        }
+
+        return true;
+    }
+};
+
 static inline bool _is_af_match_ip_type(uint32_t af_index, mc_event_type_t ip_type)
 {
     return ((af_index == HAL_INET4_FAMILY && ip_type == mc_event_type_t::IGMP) ||
             (af_index == HAL_INET6_FAMILY && ip_type == mc_event_type_t::MLD) ||
             (ip_type == mc_event_type_t::IGMP_MLD));
+}
+
+static char mc_ip_buf[HAL_INET6_TEXT_LEN + 1];
+
+static const char *nas_mc_ip_to_string(const hal_ip_addr_t& ip_addr)
+{
+    const char* ip_str = std_ip_to_string(&ip_addr, mc_ip_buf, sizeof(mc_ip_buf));
+    if (ip_str == nullptr) {
+        ip_str = "";
+    }
+    return ip_str;
 }
 
 /* Multicast snooping message */
@@ -151,12 +201,16 @@ struct mc_snooping_msg_t
     bool all_vlan;
     // For message type ROUTE, specify multicast group address
     hal_ip_addr_t group_addr;
+    // For message type ROUTE, specify if it is (*,G) or (S, G)
+    bool xg_entry;
+    // For message type ROUTE, if it is (S, G) entry, specify group source address
+    hal_ip_addr_t source_addr;
 
     /* HW related information for message type MROUTER */
 
     // List of multicast groups that need to be updated with mrouter interface
-    std::unordered_map<hal_ip_addr_t, std::pair<ndi_obj_id_t, bool>,
-                       _ip_addr_key_hash, _ip_addr_key_equal>
+    std::unordered_map<mc_entry_key_t, std::pair<ndi_obj_id_t, bool>,
+                       _mc_entry_key_hash, _mc_entry_key_equal>
                 mrouter_member_list;
 
     /* HW related information for message type ROUTE */
@@ -173,7 +227,49 @@ struct mc_snooping_msg_t
     bool last_host_member;
     // List of all members created for mrouter interfaces
     std::unordered_map<hal_ifindex_t, ndi_obj_id_t> router_member_list;
+
+    std::string dump_msg_info(bool is_sync);
 };
+
+std::string mc_snooping_msg_t::dump_msg_info(bool is_sync)
+{
+    std::ostringstream ss;
+    ss << "-------------------------------" << std::endl;
+    ss << "Received Multicast Message" << std::endl;
+    ss << "-------------------------------" << std::endl;
+    ss << "  Task Type      : " << (is_sync ? "SYNC" : "NON-SYNC") << std::endl;
+    ss << "  Event Type     : " <<
+                     (req_type == mc_event_type_t::IGMP_MLD ? "IGMP_MLD" :
+                      (req_type == mc_event_type_t::IGMP ? "IGMP" : "MLD"))
+                     << std::endl;
+    if (all_vlan) {
+        ss << "  VLAN ID        : All" << std::endl;
+    } else {
+        ss << "  VLAN ID        : " << vlan_id << std::endl;
+    }
+    ss << "  Operation Type : " <<
+                     get_oper_type_name(oper_type) << std::endl;
+    if (oper_type == mc_oper_type_t::STATUS) {
+        ss << "  Enable         : " <<
+                         (enable ? "TRUE" : "FALSE") << std::endl;
+    } else {
+        ss << "  Message Type   : " <<
+                         get_msg_type_name(msg_type) << std::endl;
+        if (msg_type == mc_msg_type_t::ROUTE) {
+            ss << "  Group Address  : " <<
+                             nas_mc_ip_to_string(group_addr) << std::endl;
+            if (xg_entry) {
+                ss << "  Source Address : *" << std::endl;
+            } else {
+                ss << "  Source Address : " <<
+                             nas_mc_ip_to_string(source_addr) << std::endl;
+            }
+        }
+        ss << "  Ifindex        : " << ifindex << std::endl;
+    }
+    ss << std::endl;
+    return ss.str();
+}
 
 class nas_mc_msg_queue
 {
@@ -255,12 +351,14 @@ struct mc_route_info_t
 };
 
 using mc_route_map_t =
-        std::unordered_map<hal_ip_addr_t, mc_route_info_t, _ip_addr_key_hash, _ip_addr_key_equal>;
+        std::unordered_map<mc_entry_key_t, mc_route_info_t, _mc_entry_key_hash, _mc_entry_key_equal>;
 
 struct mc_snooping_info_t
 {
-    // List of multicast router ports
-    std::set<hal_ifindex_t> mrouter_list;
+    // List of multicast router ports of ipv4 family
+    std::set<hal_ifindex_t> ipv4_mrouter_list;
+    // List of multicast router ports of ipv6 family
+    std::set<hal_ifindex_t> ipv6_mrouter_list;
     // List of multicast route entry
     mc_route_map_t route_list;
 };
@@ -318,15 +416,25 @@ private:
     std::unordered_map<npu_id_t, mc_snooping_npu_info_t> _npu_info;
 };
 
-static char mc_ip_buf[HAL_INET6_TEXT_LEN + 1];
-
-static const char *nas_mc_ip_to_string(const hal_ip_addr_t& ip_addr)
+static const char *nas_mc_entry_tag(hal_ip_addr_t src_ip, hal_ip_addr_t dst_ip,
+                                    bool is_xg)
 {
-    const char* ip_str = std_ip_to_string(&ip_addr, mc_ip_buf, sizeof(mc_ip_buf));
-    if (ip_str == nullptr) {
-        ip_str = "";
+    static char str_buf[TAG_PRINT_BUF_LEN + 1];
+    size_t buf_size = TAG_PRINT_BUF_LEN;
+    char *buf_p = str_buf;
+    snprintf(buf_p, buf_size, "(%s, ", is_xg ? "*" : nas_mc_ip_to_string(src_ip));
+    buf_p += strlen(buf_p);
+    buf_size -= strlen(buf_p);
+    if (buf_size == 0) {
+        return str_buf;
     }
-    return ip_str;
+    snprintf(buf_p, buf_size, "%s)", nas_mc_ip_to_string(dst_ip));
+    return str_buf;
+}
+
+static const char *nas_mc_entry_key_tag(const mc_entry_key_t& entry_key)
+{
+    return nas_mc_entry_tag(entry_key.src_ip, entry_key.dst_ip, entry_key.is_xg);
 }
 
 static inline nas_mc_msg_queue& pending_msg()
@@ -355,18 +463,18 @@ void nas_mc_del_mrouter(mc_event_type_t req_type, hal_vlan_id_t vlan_id, hal_ifi
 
 // API to add multicast route entry
 void nas_mc_add_route(mc_event_type_t req_type, hal_vlan_id_t vlan_id,
-                      hal_ip_addr_t group_addr, hal_ifindex_t ifindex)
+                      hal_ip_addr_t group_addr, bool is_xg, hal_ip_addr_t src_addr, hal_ifindex_t ifindex)
 {
     pending_msg().push({req_type, vlan_id, mc_oper_type_t::ADD, true, mc_msg_type_t::ROUTE,
-                        ifindex, false, group_addr});
+                        ifindex, false, group_addr, is_xg, src_addr});
 }
 
 // API to delete multicast route entry
 void nas_mc_del_route(mc_event_type_t req_type, hal_vlan_id_t vlan_id,
-                      hal_ip_addr_t group_addr, hal_ifindex_t ifindex)
+                      hal_ip_addr_t group_addr, bool is_xg, hal_ip_addr_t src_addr, hal_ifindex_t ifindex)
 {
     pending_msg().push({req_type, vlan_id, mc_oper_type_t::DELETE, true, mc_msg_type_t::ROUTE,
-                        ifindex, false, group_addr});
+                        ifindex, false, group_addr, is_xg, src_addr});
 }
 
 // API to delete all route entries for VLAN member interface
@@ -465,16 +573,18 @@ t_std_error nas_mc_snooping::delete_vlan_entries(hal_vlan_id_t vlan_id, mc_event
         }
         auto& route_list = vlan_it->second.route_list;
         for (auto& route_info: route_list) {
-            if (!_is_af_match_ip_type(route_info.first.af_index, ip_type)) {
+            if (!_is_af_match_ip_type(route_info.first.dst_ip.af_index, ip_type)) {
                 continue;
             }
-            ndi_mcast_entry_t mc_entry{vlan_id, NAS_NDI_MCAST_ENTRY_TYPE_XG,
-                                       route_info.first};
+            ndi_mcast_entry_t mc_entry{vlan_id,
+                                       route_info.first.is_xg ? NAS_NDI_MCAST_ENTRY_TYPE_XG : NAS_NDI_MCAST_ENTRY_TYPE_SG,
+                                       route_info.first.dst_ip,
+                                       route_info.first.src_ip};
             rc = ndi_mcast_entry_delete(npu_id, &mc_entry);
             if (rc != STD_ERR_OK) {
                 NAS_MC_LOG_ERR("NAS-MC-PROC",
-                               "Failed to delete multicast entry of group %s and VLAN %d",
-                               nas_mc_ip_to_string(route_info.first),
+                               "Failed to delete multicast entry of %s and VLAN %d",
+                               nas_mc_entry_key_tag(route_info.first),
                                vlan_id);
                 ret_val = rc;
             }
@@ -559,7 +669,7 @@ t_std_error nas_mc_snooping::delete_intf_entries(npu_id_t npu_id, bool all_vlan,
                 /* if port is not found in membership list check if it is mrouter
                    port, if yes delete it */
                 NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Ifindex %d is mrouter in %s , delete it:",
-                                 ifindex, nas_mc_ip_to_string(route_info.first));
+                                 ifindex, nas_mc_entry_key_tag(route_info.first));
                 rc = ndi_l2mc_group_delete_member(npu_id, rtr_mbr_it->second);
                 if (rc != STD_ERR_OK) {
                    NAS_MC_LOG_ERR("NAS-MC-PROC", "Failed to delete group mrouter member");
@@ -567,21 +677,23 @@ t_std_error nas_mc_snooping::delete_intf_entries(npu_id_t npu_id, bool all_vlan,
                 }
             } else if (!all_vlan) {
                 NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Ifindex %d not found in entry %s member list:",
-                                 ifindex, nas_mc_ip_to_string(route_info.first));
+                                 ifindex, nas_mc_entry_key_tag(route_info.first));
                 for (auto& mbr_info: route_info.second.host_member_list) {
-                    NAS_MC_LOG_DEBUG("NAS-MC-PROC", "  ifindex %d => member_id %d",
+                    NAS_MC_LOG_DEBUG("NAS-MC-PROC", "  ifindex %d => member_id %lu",
                                      mbr_info.first, mbr_info.second);
                 }
             }
             if (del_entry) {
                 NAS_MC_LOG_DEBUG("NAS-MC-PROC", "No host member in group, entry will be deleted");
-                ndi_mcast_entry_t mc_entry{vlan_id, NAS_NDI_MCAST_ENTRY_TYPE_XG,
-                                           route_info.first};
+                ndi_mcast_entry_t mc_entry{vlan_id,
+                                           route_info.first.is_xg ? NAS_NDI_MCAST_ENTRY_TYPE_XG : NAS_NDI_MCAST_ENTRY_TYPE_SG,
+                                           route_info.first.dst_ip,
+                                           route_info.first.src_ip};
                 rc = ndi_mcast_entry_delete(npu_id, &mc_entry);
                 if (rc != STD_ERR_OK) {
                     NAS_MC_LOG_ERR("NAS-MC-PROC",
                                    "Failed to delete multicast entry of group %s and VLAN %d",
-                                   nas_mc_ip_to_string(route_info.first),
+                                   nas_mc_entry_key_tag(route_info.first),
                                    vlan_id);
                     ret_val = rc;
                 }
@@ -621,7 +733,7 @@ void nas_mc_snooping::flush(hal_vlan_id_t vlan_id, mc_event_type_t ip_type)
         }
         auto& route_list = vlan_it->second.route_list;
         for (auto ent_it = route_list.begin(); ent_it != route_list.end();) {
-            if (_is_af_match_ip_type(ent_it->first.af_index, ip_type)) {
+            if (_is_af_match_ip_type(ent_it->first.dst_ip.af_index, ip_type)) {
                 ent_it = route_list.erase(ent_it);
             } else {
                 ent_it ++;
@@ -653,6 +765,10 @@ bool nas_mc_snooping::update_needed(const mc_snooping_msg_t& msg_info)
                 (msg_info.req_type == mc_event_type_t::IGMP ? itor->second.first : itor->second.second);
             if (enabled != msg_info.enable) {
                 return true;
+            } else {
+                // Use duplicate enable/disable as trigger point to dump cache
+                NAS_MC_LOG_DEBUG("NAS-MC-PROC", "\n%s\n",
+                                 dump_vlan_entries(0, msg_info.vlan_id).c_str());
             }
         }
         NAS_MC_LOG_DEBUG("NAS-MC-PROC", "No need to update status, current setting of VLAN %d: IGMP %s MLD %s",
@@ -711,21 +827,46 @@ bool nas_mc_snooping::update_needed(const mc_snooping_msg_t& msg_info)
 
     auto& snp_info = itor->second;
     if (msg_info.msg_type == mc_msg_type_t::MROUTER) {
-        auto mr_itor = snp_info.mrouter_list.find(msg_info.ifindex);
-        if ((mr_itor == snp_info.mrouter_list.end() && msg_info.oper_type == mc_oper_type_t::ADD) ||
-            (mr_itor != snp_info.mrouter_list.end() && msg_info.oper_type == mc_oper_type_t::DELETE)) {
-            return true;
-        } else {
-            NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Ifindex %d %s in mrouter list of VLAN %d", msg_info.ifindex,
-                             msg_info.oper_type == mc_oper_type_t::ADD ? "already exists" : "not found",
-                             itor->first);
+        auto ipv4_mr_itor = snp_info.ipv4_mrouter_list.find(msg_info.ifindex);
+        auto ipv6_mr_itor = snp_info.ipv6_mrouter_list.find(msg_info.ifindex);
+        if (msg_info.req_type == mc_event_type_t::IGMP) {
+            if ((ipv4_mr_itor == snp_info.ipv4_mrouter_list.end() && msg_info.oper_type == mc_oper_type_t::ADD) ||
+                (ipv4_mr_itor != snp_info.ipv4_mrouter_list.end() && msg_info.oper_type == mc_oper_type_t::DELETE)) {
+                return true;
+            }
+        } else if (msg_info.req_type == mc_event_type_t::MLD) {
+            if ((ipv6_mr_itor == snp_info.ipv6_mrouter_list.end() && msg_info.oper_type == mc_oper_type_t::ADD) ||
+                (ipv6_mr_itor != snp_info.ipv6_mrouter_list.end() && msg_info.oper_type == mc_oper_type_t::DELETE)) {
+                return true;
+            }
+        } else if (msg_info.req_type == mc_event_type_t::IGMP_MLD) {
+            if ((ipv4_mr_itor == snp_info.ipv4_mrouter_list.end() && ipv6_mr_itor == snp_info.ipv6_mrouter_list.end() &&
+                 msg_info.oper_type == mc_oper_type_t::ADD) ||
+                (ipv4_mr_itor != snp_info.ipv4_mrouter_list.end() && ipv6_mr_itor != snp_info.ipv6_mrouter_list.end() &&
+                 msg_info.oper_type == mc_oper_type_t::DELETE)) {
+                return true;
+            }
         }
+
+        NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Ifindex %d %s in mrouter list of VLAN %d", msg_info.ifindex,
+                         msg_info.oper_type == mc_oper_type_t::ADD ? "already exists" : "not found",
+                         itor->first);
     } else if (msg_info.msg_type == mc_msg_type_t::ROUTE){
-        auto rt_itor = snp_info.route_list.find(msg_info.group_addr);
+        if (!_is_af_match_ip_type(msg_info.group_addr.af_index, msg_info.req_type)) {
+            NAS_MC_LOG_ERR("NAS-MC-PROC", "Input group address  family %d is not matched with event type %d",
+                           msg_info.group_addr.af_index, msg_info.req_type);
+            return false;
+        }
+        if (!msg_info.xg_entry && !_is_af_match_ip_type(msg_info.source_addr.af_index, msg_info.req_type)) {
+            NAS_MC_LOG_ERR("NAS-MC-PROC", "Input source address  family %d is not matched with event type %d",
+                           msg_info.source_addr.af_index, msg_info.req_type);
+            return false;
+        }
+        auto rt_itor = snp_info.route_list.find({msg_info.group_addr, msg_info.xg_entry, msg_info.source_addr});
         if (rt_itor == snp_info.route_list.end()) {
             if (msg_info.oper_type == mc_oper_type_t::DELETE) {
                 NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Multicast group %s not found for delete",
-                                 nas_mc_ip_to_string(msg_info.group_addr));
+                                 nas_mc_entry_tag(msg_info.source_addr, msg_info.group_addr, msg_info.xg_entry));
                 return false;
             } else {
                 return true;
@@ -755,8 +896,6 @@ bool nas_mc_snooping::update_needed(const mc_snooping_msg_t& msg_info)
     }
 
     NAS_MC_LOG_DEBUG("NAS-MC-PROC", "No need to update mrouter or entry of VLAN %d", itor->first);
-    NAS_MC_LOG_DEBUG("NAS-MC-PROC", "\n%s\n",
-                     dump_vlan_entries(0, msg_info.vlan_id).c_str());
     return false;
 }
 
@@ -830,37 +969,51 @@ void nas_mc_snooping::update(const mc_snooping_msg_t& msg_info)
         if (msg_info.msg_type == mc_msg_type_t::MROUTER) {
             NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Add mrouter ifindex %d to VLAN %d mrouter list",
                             msg_info.ifindex, msg_info.vlan_id);
-            snp_info.mrouter_list.insert(msg_info.ifindex);
+            if (msg_info.req_type == mc_event_type_t::IGMP || msg_info.req_type == mc_event_type_t::IGMP_MLD) {
+                snp_info.ipv4_mrouter_list.insert(msg_info.ifindex);
+            }
+            if (msg_info.req_type == mc_event_type_t::MLD || msg_info.req_type == mc_event_type_t::IGMP_MLD) {
+                snp_info.ipv6_mrouter_list.insert(msg_info.ifindex);
+            }
+
             // Add to mrouter interface to multicast entries
             for (auto& rt_info: snp_info.route_list) {
                 auto mrt_itor = msg_info.mrouter_member_list.find(rt_info.first);
                 if (mrt_itor != msg_info.mrouter_member_list.end() && mrt_itor->second.second) {
                     NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Add mrouter interface to multicast entry %s",
-                                    nas_mc_ip_to_string(rt_info.first));
+                                    nas_mc_entry_key_tag(rt_info.first));
                     rt_info.second.router_member_list.insert({msg_info.ifindex, mrt_itor->second.first});
                 }
             }
         } else if (msg_info.msg_type == mc_msg_type_t::ROUTE) {
-            auto it1 = snp_info.route_list.find(msg_info.group_addr);
+            auto it1 = snp_info.route_list.find({msg_info.group_addr, msg_info.xg_entry, msg_info.source_addr});
             if (it1 == snp_info.route_list.end()) {
-                NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Add route entry: VLAN %d group %s Group ID %d",
-                                msg_info.vlan_id, nas_mc_ip_to_string(msg_info.group_addr),
+                NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Add route entry: VLAN %d %s Group ID 0x%" PRIx64,
+                                msg_info.vlan_id,
+                                nas_mc_entry_tag(msg_info.source_addr, msg_info.group_addr, msg_info.xg_entry),
                                 msg_info.group_id);
-                snp_info.route_list[msg_info.group_addr] = mc_route_info_t{msg_info.group_id};
+                snp_info.route_list[{msg_info.group_addr, msg_info.xg_entry, msg_info.source_addr}] =
+                        mc_route_info_t{msg_info.group_id};
                 // Add all members for mrouter interface to new multicast entry
-                for (auto mrt_ifindex: snp_info.mrouter_list) {
+                decltype(snp_info.ipv4_mrouter_list)* mrouter_list_p = nullptr;
+                if (msg_info.req_type == mc_event_type_t::IGMP) {
+                    mrouter_list_p = &snp_info.ipv4_mrouter_list;
+                } else {
+                    mrouter_list_p = &snp_info.ipv6_mrouter_list;
+                }
+                for (auto mrt_ifindex: *mrouter_list_p) {
                     if (msg_info.router_member_list.find(mrt_ifindex) != msg_info.router_member_list.end()) {
                         NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Add mrouter ifindex %d to route member list",
                                         mrt_ifindex);
-                        snp_info.route_list.at(msg_info.group_addr).router_member_list.insert(
-                                {mrt_ifindex, msg_info.router_member_list.at(mrt_ifindex)});
+                        snp_info.route_list.at({msg_info.group_addr, msg_info.xg_entry, msg_info.source_addr}).
+                            router_member_list.insert({mrt_ifindex, msg_info.router_member_list.at(mrt_ifindex)});
                     }
                 }
             }
             NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Add route member: VLAN %d group %s port %d NDI_ID 0x%" PRIx64,
                             msg_info.vlan_id, nas_mc_ip_to_string(msg_info.group_addr),
                             msg_info.ifindex, msg_info.member_id);
-            snp_info.route_list.at(msg_info.group_addr).host_member_list.
+            snp_info.route_list.at({msg_info.group_addr, msg_info.xg_entry, msg_info.source_addr}).host_member_list.
                         insert({msg_info.ifindex, msg_info.member_id});
         }
     } else if (msg_info.oper_type == mc_oper_type_t::DELETE) {
@@ -873,18 +1026,25 @@ void nas_mc_snooping::update(const mc_snooping_msg_t& msg_info)
             if (msg_info.msg_type == mc_msg_type_t::MROUTER) {
                 NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Delete mrouter ifindex %d from VLAN %d mrouter list",
                                 msg_info.ifindex, itor->first);
-                snp_info.mrouter_list.erase(msg_info.ifindex);
+
+                if (msg_info.req_type == mc_event_type_t::IGMP || msg_info.req_type == mc_event_type_t::IGMP_MLD) {
+                    snp_info.ipv4_mrouter_list.erase(msg_info.ifindex);
+                }
+                if (msg_info.req_type == mc_event_type_t::MLD || msg_info.req_type == mc_event_type_t::IGMP_MLD) {
+                    snp_info.ipv6_mrouter_list.erase(msg_info.ifindex);
+                }
+
                 // Delete from router member list
                 for (auto& rt_info: snp_info.route_list) {
                     auto mrt_itor = msg_info.mrouter_member_list.find(rt_info.first);
                     if (mrt_itor != msg_info.mrouter_member_list.end() && !mrt_itor->second.second) {
                         NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Delete mrouter interface from multicast entry %s",
-                                        nas_mc_ip_to_string(rt_info.first));
+                                        nas_mc_entry_key_tag(rt_info.first));
                         rt_info.second.router_member_list.erase(msg_info.ifindex);
                     }
                 }
             } else if (msg_info.msg_type == mc_msg_type_t::ROUTE) {
-                auto it1 = snp_info.route_list.find(msg_info.group_addr);
+                auto it1 = snp_info.route_list.find({msg_info.group_addr, msg_info.xg_entry, msg_info.source_addr});
                 if (it1 != snp_info.route_list.end()) {
                     auto& mbr_list = it1->second.host_member_list;
                     NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Delete route member: VLAN %d group %s port %d",
@@ -893,7 +1053,7 @@ void nas_mc_snooping::update(const mc_snooping_msg_t& msg_info)
                     mbr_list.erase(msg_info.ifindex);
                     if (mbr_list.empty()) {
                         // If all members deleted, route entry will also be deleted
-                        NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Delete empty route entry: VLAN %d group",
+                        NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Delete empty route entry: VLAN %d group %s",
                                         itor->first, nas_mc_ip_to_string(msg_info.group_addr));
                         snp_info.route_list.erase(it1);
                     }
@@ -901,21 +1061,24 @@ void nas_mc_snooping::update(const mc_snooping_msg_t& msg_info)
             } else if (msg_info.msg_type == mc_msg_type_t::INTERFACE) {
                 NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Delete ifindex %d from VLAN %d mrouter and route list",
                                 msg_info.ifindex, itor->first);
-                if (snp_info.mrouter_list.find(msg_info.ifindex) != snp_info.mrouter_list.end()) {
-                    snp_info.mrouter_list.erase(msg_info.ifindex);
+                if (snp_info.ipv4_mrouter_list.find(msg_info.ifindex) != snp_info.ipv4_mrouter_list.end()) {
+                    snp_info.ipv4_mrouter_list.erase(msg_info.ifindex);
+                }
+                if (snp_info.ipv6_mrouter_list.find(msg_info.ifindex) != snp_info.ipv6_mrouter_list.end()) {
+                    snp_info.ipv6_mrouter_list.erase(msg_info.ifindex);
                 }
                 // Delete from router member list
                 for (auto it = snp_info.route_list.begin(); it != snp_info.route_list.end();) {
                     auto mr_it = it->second.router_member_list.find(msg_info.ifindex);
                     if (mr_it != it->second.router_member_list.end()) {
                         NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Remove mrouter interface from multicast entry %s",
-                                        nas_mc_ip_to_string(it->first));
+                                        nas_mc_entry_key_tag(it->first));
                         it->second.router_member_list.erase(mr_it);
                     }
                     auto hst_it = it->second.host_member_list.find(msg_info.ifindex);
                     if (hst_it != it->second.host_member_list.end()) {
                         NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Remove host interface from multicast entry %s",
-                                        nas_mc_ip_to_string(it->first));
+                                        nas_mc_entry_key_tag(it->first));
                         it->second.host_member_list.erase(hst_it);
                     }
                     if (it->second.host_member_list.empty()) {
@@ -925,7 +1088,7 @@ void nas_mc_snooping::update(const mc_snooping_msg_t& msg_info)
                     }
                 }
             }
-            if (snp_info.mrouter_list.empty() && snp_info.route_list.empty()) {
+            if (snp_info.ipv4_mrouter_list.empty() && snp_info.ipv6_mrouter_list.empty() && snp_info.route_list.empty()) {
                 // If there is no mrouter and route entry left for VLAN, VLAN unit
                 // will be deleted
                 NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Delete empty multicast unit for VLAN %d",
@@ -957,6 +1120,9 @@ void nas_mc_snooping::get_mrouter_ndi_info(mc_snooping_msg_t& msg_info)
         return;
     }
     for (auto& route_info: _npu_info[npu_port.npu_id][msg_info.vlan_id].route_list) {
+        if (!_is_af_match_ip_type(route_info.first.dst_ip.af_index, msg_info.req_type)) {
+            continue;
+        }
         auto rt_itor = route_info.second.router_member_list.find(msg_info.ifindex);
         auto hst_itor = route_info.second.host_member_list.find(msg_info.ifindex);
         if (msg_info.oper_type == mc_oper_type_t::ADD) {
@@ -998,11 +1164,17 @@ void nas_mc_snooping::get_route_ndi_info(mc_snooping_msg_t& msg_info)
     if (itor == _npu_info[npu_port.npu_id].end()) {
         return;
     }
-    auto grp_itor = itor->second.route_list.find(msg_info.group_addr);
+    auto grp_itor = itor->second.route_list.find({msg_info.group_addr, msg_info.xg_entry, msg_info.source_addr});
     if (grp_itor == itor->second.route_list.end()) {
         if (msg_info.oper_type == mc_oper_type_t::ADD) {
             // Add all mrouter interfaces to list for new multicast entry
-            for (auto rt_ifindex: itor->second.mrouter_list) {
+            decltype(itor->second.ipv4_mrouter_list)* mrouter_list_p = nullptr;
+            if (msg_info.req_type == mc_event_type_t::IGMP) {
+                mrouter_list_p = &itor->second.ipv4_mrouter_list;
+            } else {
+                mrouter_list_p = &itor->second.ipv6_mrouter_list;
+            }
+            for (auto rt_ifindex: *mrouter_list_p) {
                 msg_info.router_member_list.insert({rt_ifindex, 0});
             }
         }
@@ -1053,21 +1225,27 @@ std::string nas_mc_snooping::dump_vlan_entries(npu_id_t npu_id, hal_vlan_id_t vl
     ss << "---------------------------------------" << std::endl;
     ss << "     Cache of VLAN " << vlan_itor->first << std::endl;
     ss << "---------------------------------------" << std::endl;
-    ss << " mrouters: ";
-    for (auto ifindex: snp_info.mrouter_list) {
+    ss << " ipv4 mrouters: ";
+    for (auto ifindex: snp_info.ipv4_mrouter_list) {
+        ss << ifindex << " ";
+    }
+    ss << std::endl;
+    ss << " ipv6 mrouters: ";
+    for (auto ifindex: snp_info.ipv6_mrouter_list) {
         ss << ifindex << " ";
     }
     ss << std::endl;
     ss << " entries:" << std::endl;
     for (auto& route_info: snp_info.route_list) {
-        ss << "  " << nas_mc_ip_to_string(route_info.first) << " ==> ";
+        ss << "  " << nas_mc_entry_key_tag(route_info.first) << " ==> R:{";
         for (auto& mbr_info: route_info.second.router_member_list) {
             ss << mbr_info.first << " ";
         }
-        ss << "| ";
+        ss << "} H:{";
         for (auto& mbr_info: route_info.second.host_member_list) {
             ss << mbr_info.first << " ";
         }
+        ss << "}";
         ss << std::endl;
     }
     return ss.str();
@@ -1133,7 +1311,7 @@ static t_std_error nas_mc_config_hw(mc_snooping_msg_t& msg_info)
             // Add mrouter interface to all multicast entries under same VLAN
             for (auto& mrt_member: msg_info.mrouter_member_list) {
                 NAS_MC_LOG_INFO("NAS-MC-PROC-HW", "Add mrouter interface %d to mc route entry %s",
-                                msg_info.ifindex, nas_mc_ip_to_string(mrt_member.first));
+                                msg_info.ifindex, nas_mc_ip_to_string(mrt_member.first.dst_ip));
                 ndi_obj_id_t mbr_id;
                 if (!mrt_member.second.second) {
                     rc = nas_mc_npu_add_group_member(mrt_member.second.first, npu_port, mbr_id);
@@ -1148,7 +1326,7 @@ static t_std_error nas_mc_config_hw(mc_snooping_msg_t& msg_info)
         } else if (msg_info.oper_type == mc_oper_type_t::DELETE) {
             for (auto& mrt_member: msg_info.mrouter_member_list) {
                 NAS_MC_LOG_INFO("NAS-MC-PROC-HW", "Delete mrouter interface %d from mc route entry %s",
-                                msg_info.ifindex, nas_mc_ip_to_string(mrt_member.first));
+                                msg_info.ifindex, nas_mc_ip_to_string(mrt_member.first.dst_ip));
                 if (mrt_member.second.second) {
                     rc = ndi_l2mc_group_delete_member(npu_port.npu_id, mrt_member.second.first);
                     if (rc != STD_ERR_OK) {
@@ -1168,7 +1346,6 @@ static t_std_error nas_mc_config_hw(mc_snooping_msg_t& msg_info)
     } else if (msg_info.msg_type == mc_msg_type_t::ROUTE) {
         if (msg_info.oper_type == mc_oper_type_t::ADD) {
             ndi_obj_id_t group_id;
-            bool new_entry = false;
             if (!msg_info.entry_exist) {
                 rc = ndi_l2mc_group_create(npu_port.npu_id, &group_id);
                 if (rc != STD_ERR_OK) {
@@ -1177,18 +1354,6 @@ static t_std_error nas_mc_config_hw(mc_snooping_msg_t& msg_info)
                 }
                 NAS_MC_LOG_INFO("NAS-MC-PROC-HW", "New multicast group created, group_id = 0x%" PRIx64,
                                 group_id);
-                ndi_mcast_entry_t mc_entry{msg_info.vlan_id, NAS_NDI_MCAST_ENTRY_TYPE_XG,
-                                           msg_info.group_addr};
-                mc_entry.group_id = group_id;
-                rc = ndi_mcast_entry_create(npu_port.npu_id, &mc_entry);
-                if (rc != STD_ERR_OK) {
-                    NAS_MC_LOG_ERR("NAS-MC-PROC-HW", "Failed to create multicast entry");
-                    ndi_l2mc_group_delete(npu_port.npu_id, group_id);
-                    return rc;
-                }
-                NAS_MC_LOG_INFO("NAS-MC-PROC-HW", "New multicast entry for group %s created",
-                                nas_mc_ip_to_string(msg_info.group_addr));
-                msg_info.entry_exist = true;
                 msg_info.group_id = group_id;
 
                 // Add all members for mrouter interface
@@ -1203,6 +1368,7 @@ static t_std_error nas_mc_config_hw(mc_snooping_msg_t& msg_info)
                     ndi_obj_id_t mbr_id;
                     rc = nas_mc_npu_add_group_member(group_id, np, mbr_id);
                     if (rc != STD_ERR_OK) {
+                        NAS_MC_LOG_ERR("NAS-MC-PROC-HW", "Failed to add member for ifindex %d", rt_mbr.first);
                         continue;
                     }
                     rt_mbr.second = mbr_id;
@@ -1213,18 +1379,17 @@ static t_std_error nas_mc_config_hw(mc_snooping_msg_t& msg_info)
                         msg_info.member_id = mbr_id;
                     }
                 }
-                new_entry = true;
             }
             if (!msg_info.member_is_mrouter) {
                 ndi_obj_id_t mbr_id;
                 rc = nas_mc_npu_add_group_member(msg_info.group_id, npu_port, mbr_id);
                 if (rc != STD_ERR_OK) {
                     NAS_MC_LOG_ERR("NAS-MC-PROC-HW", "Failed to add multicast group member");
-                    if (new_entry) {
-                        //rollback entry and group create
-                        ndi_mcast_entry_t mc_entry{msg_info.vlan_id, NAS_NDI_MCAST_ENTRY_TYPE_XG,
-                                                   msg_info.group_addr};
-                        ndi_mcast_entry_delete(npu_port.npu_id, &mc_entry);
+                    if (!msg_info.entry_exist) {
+                        //rollback group create
+                        for (auto& rt_mbr: msg_info.router_member_list) {
+                            ndi_l2mc_group_delete_member(npu_port.npu_id, rt_mbr.second);
+                        }
                         ndi_l2mc_group_delete(npu_port.npu_id, msg_info.group_id);
                     }
                     return rc;
@@ -1232,6 +1397,29 @@ static t_std_error nas_mc_config_hw(mc_snooping_msg_t& msg_info)
                 msg_info.member_id = mbr_id;
                 NAS_MC_LOG_INFO("NAS-MC-PROC-HW", "Host member of ifindex %d added to group, member_id = 0x%"
                                 PRIx64, msg_info.ifindex, mbr_id);
+            }
+            if (!msg_info.entry_exist) {
+                ndi_mcast_entry_t mc_entry{msg_info.vlan_id,
+                                           msg_info.xg_entry ? NAS_NDI_MCAST_ENTRY_TYPE_XG : NAS_NDI_MCAST_ENTRY_TYPE_SG,
+                                           msg_info.group_addr,
+                                           msg_info.source_addr};
+                mc_entry.group_id = msg_info.group_id;
+                rc = ndi_mcast_entry_create(npu_port.npu_id, &mc_entry);
+                if (rc != STD_ERR_OK) {
+                    NAS_MC_LOG_ERR("NAS-MC-PROC-HW", "Failed to create multicast entry");
+                    // rollback group create
+                    if (!msg_info.member_is_mrouter) {
+                        ndi_l2mc_group_delete_member(npu_port.npu_id, msg_info.member_id);
+                    }
+                    for (auto& rt_mbr: msg_info.router_member_list) {
+                        ndi_l2mc_group_delete_member(npu_port.npu_id, rt_mbr.second);
+                    }
+                    ndi_l2mc_group_delete(npu_port.npu_id, msg_info.group_id);
+                    return rc;
+                }
+                NAS_MC_LOG_INFO("NAS-MC-PROC-HW", "New multicast entry for group %s created",
+                                nas_mc_ip_to_string(msg_info.group_addr));
+                msg_info.entry_exist = true;
             }
         } else if (msg_info.oper_type == mc_oper_type_t::DELETE) {
             if (!msg_info.member_is_mrouter || msg_info.last_host_member) {
@@ -1243,8 +1431,10 @@ static t_std_error nas_mc_config_hw(mc_snooping_msg_t& msg_info)
                 if (msg_info.last_host_member) {
                     NAS_MC_LOG_INFO("NAS-MC-PROC-HW", "Delete entry for %s of vlan %d that point to empty group",
                                     nas_mc_ip_to_string(msg_info.group_addr), msg_info.vlan_id);
-                    ndi_mcast_entry_t mc_entry{msg_info.vlan_id, NAS_NDI_MCAST_ENTRY_TYPE_XG,
-                                               msg_info.group_addr};
+                    ndi_mcast_entry_t mc_entry{msg_info.vlan_id,
+                                               msg_info.xg_entry ? NAS_NDI_MCAST_ENTRY_TYPE_XG : NAS_NDI_MCAST_ENTRY_TYPE_SG,
+                                               msg_info.group_addr,
+                                               msg_info.source_addr};
                     rc = ndi_mcast_entry_delete(npu_port.npu_id, &mc_entry);
                     if (rc != STD_ERR_OK) {
                         NAS_MC_LOG_ERR("NAS-MC-PROC-HW", "Failed to delete multicast entry");
@@ -1307,32 +1497,7 @@ static int nas_mc_proc_snooping_msg(void)
         bool is_sync = false;
         pending_msg().wait_for_msg();
         while (pending_msg().pop(msg_info, is_sync)) {
-            NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Received Multicast message:");
-            NAS_MC_LOG_DEBUG("NAS-MC-PROC", "  Task Type      : %s", is_sync ? "SYNC" : "NON-SYNC");
-            NAS_MC_LOG_DEBUG("NAS-MC-PROC", "  Event Type     : %s",
-                             msg_info.req_type == mc_event_type_t::IGMP_MLD ? "IGMP_MLD" :
-                             (msg_info.req_type == mc_event_type_t::IGMP ? "IGMP" : "MLD"));
-            if (msg_info.all_vlan) {
-                NAS_MC_LOG_DEBUG("NAS-MC-PROC", "  VLAN ID        : All");
-            } else {
-                NAS_MC_LOG_DEBUG("NAS-MC-PROC", "  VLAN ID        : %d", msg_info.vlan_id);
-            }
-            NAS_MC_LOG_DEBUG("NAS-MC-PROC", "  Operation Type : %s",
-                             get_oper_type_name(msg_info.oper_type));
-            if (msg_info.oper_type == mc_oper_type_t::STATUS) {
-                NAS_MC_LOG_DEBUG("NAS-MC-PROC", "  Enable         : %s",
-                                 msg_info.enable ? "TRUE" : "FALSE");
-            } else {
-                NAS_MC_LOG_DEBUG("NAS-MC-PROC", "  Message Type   : %s",
-                                 get_msg_type_name(msg_info.msg_type));
-                if (msg_info.msg_type == mc_msg_type_t::ROUTE) {
-                    NAS_MC_LOG_DEBUG("NAS-MC-PROC", "  Group Address  : %s",
-                                     nas_mc_ip_to_string(msg_info.group_addr));
-                }
-                NAS_MC_LOG_DEBUG("NAS-MC-PROC", "  Ifindex        : %d", msg_info.ifindex);
-            }
-
-
+            NAS_MC_LOG_DEBUG("NAS-MC-PROC", "\n%s\n", msg_info.dump_msg_info(is_sync).c_str());
             if (cache().update_needed(msg_info)) {
                 t_std_error rc = STD_ERR_OK;
                 // call ndi api to program multicast settings to npu

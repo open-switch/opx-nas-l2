@@ -1,0 +1,7 @@
+#!/bin/bash
+
+./nas_mac_unittest
+./nas_stg_unittest
+./nas_sflow_unittest
+./nas_mirror_unittest
+./nas_mcast_unittest

@@ -29,11 +29,15 @@
 #include "cps_class_map.h"
 
 #include <inttypes.h>
+#include <vector>
 
 static cps_api_key_t mc_igmp_obj_key;
 static cps_api_key_t mc_mld_obj_key;
 
 #define KEY_PRINT_BUF_LEN 100
+
+static hal_ip_addr_t ipv4_null_ip;
+static hal_ip_addr_t ipv6_null_ip;
 
 // Convert interface name to ifindex
 static t_std_error nas_mc_name_to_ifindex(const char *if_name, hal_ifindex_t& ifindex)
@@ -77,28 +81,38 @@ static bool nas_mc_route_handler(mc_event_type_t evt_type, hal_vlan_id_t vid, bo
                                  const cps_api_object_it_t& itor)
 {
     hal_ip_addr_t group_ip;
+    hal_ip_addr_t source_ip;
     hal_ifindex_t ifindex = 0;
-    cps_api_attr_id_t group_addr_id;
+    cps_api_attr_id_t group_addr_id, group_src_id, group_src_addr_id;
     cps_api_attr_id_t group_if_id;
 
     if (evt_type == mc_event_type_t::IGMP) {
         group_addr_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_IGMP_SNOOPING_VLANS_VLAN_GROUP_ADDRESS;
         group_if_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_IGMP_SNOOPING_VLANS_VLAN_GROUP_INTERFACE;
+        group_src_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_IGMP_SNOOPING_VLANS_VLAN_GROUP_SOURCE;
+        group_src_addr_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_IGMP_SNOOPING_VLANS_VLAN_GROUP_SOURCE_ADDRESS;
     } else if (evt_type == mc_event_type_t::MLD) {
         group_addr_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_MLD_SNOOPING_VLANS_VLAN_GROUP_ADDRESS;
         group_if_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_MLD_SNOOPING_VLANS_VLAN_GROUP_INTERFACE;
+        group_src_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_MLD_SNOOPING_VLANS_VLAN_GROUP_SOURCE;
+        group_src_addr_id = IGMP_MLD_SNOOPING_RT_ROUTING_STATE_CONTROL_PLANE_PROTOCOLS_MLD_SNOOPING_VLANS_VLAN_GROUP_SOURCE_ADDRESS;
     } else {
         return false;
     }
 
+    std::vector<hal_ip_addr_t> src_ip_list = {};
     cps_api_object_it_t in_it = itor;
     cps_api_object_it_inside(&in_it);
     for (; cps_api_object_it_valid(&in_it); cps_api_object_it_next(&in_it)) {
         cps_api_attr_id_t list_index = cps_api_object_attr_id(in_it.attr);
-        NAS_MC_LOG_DEBUG("NAS-MC-CPS", "Multicast group item index: %d", list_index);
+        NAS_MC_LOG_DEBUG("NAS-MC-CPS", "Multicast group item index: %lu", list_index);
         cps_api_object_it_t grp_it = in_it;
         cps_api_object_it_inside(&grp_it);
         bool addr_found = false, if_found = false;
+
+        /* Clear source list from previous group */
+        src_ip_list.clear();
+
         for(; cps_api_object_it_valid(&grp_it); cps_api_object_it_next(&grp_it)) {
             cps_api_attr_id_t grp_attr_id = cps_api_object_attr_id(grp_it.attr);
             NAS_MC_LOG_DEBUG("NAS-MC-CPS", "Handling mc group attribute id %" PRIx64, grp_attr_id);
@@ -111,7 +125,7 @@ static bool nas_mc_route_handler(mc_event_type_t evt_type, hal_vlan_id_t vid, bo
                 }
                 if_found = true;
             } else if (grp_attr_id == group_addr_id) {
-                const char *ip_addr_str = (char *)cps_api_object_attr_data_bin(grp_it.attr);
+                const char *ip_addr_str = (const char *)cps_api_object_attr_data_bin(grp_it.attr);
                 NAS_MC_LOG_DEBUG("NAS-MC-CPS", "Multicast route group address %s", ip_addr_str);
                 memset(&group_ip, 0, sizeof(hal_ip_addr_t));
                 if (!std_str_to_ip(ip_addr_str, &group_ip)) {
@@ -124,6 +138,33 @@ static bool nas_mc_route_handler(mc_event_type_t evt_type, hal_vlan_id_t vid, bo
                     return false;
                 }
                 addr_found = true;
+            } else if (grp_attr_id == group_src_id) {
+                cps_api_object_it_t in_grp_it = grp_it;
+                cps_api_object_it_inside(&in_grp_it);
+                for(; cps_api_object_it_valid(&in_grp_it); cps_api_object_it_next(&in_grp_it)) {
+                    cps_api_attr_id_t src_index = cps_api_object_attr_id(in_grp_it.attr);
+                    NAS_MC_LOG_DEBUG("NAS-MC-CPS", "Multicast source item index: %lu", src_index);
+                    cps_api_object_it_t src_it = in_grp_it;
+                    cps_api_object_it_inside(&src_it);
+                    for(; cps_api_object_it_valid(&src_it); cps_api_object_it_next(&src_it)) {
+                        cps_api_attr_id_t src_attr_id = cps_api_object_attr_id(src_it.attr);
+                        if (src_attr_id == group_src_addr_id) {
+                            const char *src_ip_str = (const char *)cps_api_object_attr_data_bin(src_it.attr);
+                            NAS_MC_LOG_DEBUG("NAS-MC-CPS", "Multicast route group source address %s", src_ip_str);
+                            memset(&source_ip, 0, sizeof(hal_ip_addr_t));
+                            if (!std_str_to_ip(src_ip_str, &source_ip)) {
+                                NAS_MC_LOG_ERR("NAS-MC-CPS", "Failed to convert source IP string to data");
+                                return false;
+                            }
+                            if (!((evt_type == mc_event_type_t::IGMP && source_ip.af_index == HAL_INET4_FAMILY) ||
+                                  (evt_type == mc_event_type_t::MLD && source_ip.af_index == HAL_INET6_FAMILY))) {
+                                NAS_MC_LOG_ERR("NAS-MC-CPS", "Protocol family of group source IP not match");
+                                return false;
+                            }
+                            src_ip_list.push_back(source_ip);
+                        }
+                    }
+                }
             }
         }
         if (!addr_found || !if_found) {
@@ -131,14 +172,26 @@ static bool nas_mc_route_handler(mc_event_type_t evt_type, hal_vlan_id_t vid, bo
                            addr_found ? "" : "GROUP_IP", if_found ? "" : "INTERFACE");
             return false;
         }
-        char ip_buf[HAL_INET6_TEXT_LEN + 1];
-        const char *ip_str = std_ip_to_string(&group_ip, ip_buf, sizeof(ip_buf));
-        NAS_MC_LOG_INFO("NAS-MC-CPS", "%s multicast route entry: VID %d IP %s IF %d",
-                         add ? "Add" : "Delete", vid, ip_str, ifindex);
-        if (add) {
-            nas_mc_add_route(evt_type, vid, group_ip, ifindex);
-        } else {
-            nas_mc_del_route(evt_type, vid, group_ip, ifindex);
+        bool is_xg = src_ip_list.empty();
+        if (is_xg) {
+            if (evt_type == mc_event_type_t::IGMP) {
+                src_ip_list.push_back(ipv4_null_ip);
+            } else {
+                src_ip_list.push_back(ipv6_null_ip);
+            }
+        }
+        for (auto& src_ip: src_ip_list) {
+            char ip_buf[HAL_INET6_TEXT_LEN + 1];
+            const char *ip_str = std_ip_to_string(&group_ip, ip_buf, sizeof(ip_buf));
+            char src_ip_buf[HAL_INET6_TEXT_LEN + 1];
+            const char *src_ip_str = std_ip_to_string(&src_ip, src_ip_buf, sizeof(src_ip_buf));
+            NAS_MC_LOG_INFO("NAS-MC-CPS", "%s multicast route entry: VID %d IP %s SRC %s IF %d",
+                             add ? "Add" : "Delete", vid, ip_str, src_ip_str, ifindex);
+            if (add) {
+                nas_mc_add_route(evt_type, vid, group_ip, is_xg, src_ip, ifindex);
+            } else {
+                nas_mc_del_route(evt_type, vid, group_ip, is_xg, src_ip, ifindex);
+            }
         }
     }
 
@@ -210,6 +263,7 @@ static bool nas_mc_event_handler(cps_api_object_t evt_obj, void *param)
         is_add = false;
     } else {
         // Other operation type only for snooping status setting
+        NAS_MC_LOG_DEBUG("NAS-MC-CPS", "No handling for operation set");
         return true;
     }
 
@@ -279,7 +333,7 @@ static cps_api_return_code_t nas_mc_cleanup_handler(void *context,
     }
     cps_api_object_t obj = cps_api_object_list_get(param->change_list,ix);
     if (obj == NULL) {
-        NAS_MC_LOG_ERR("NAS-MC-CPS-CLEANUP", "Cleanup object is not present at index %d", ix);
+        NAS_MC_LOG_ERR("NAS-MC-CPS-CLEANUP", "Cleanup object is not present at index %lu", ix);
         return cps_api_ret_code_ERR;
     }
 
@@ -374,6 +428,15 @@ t_std_error nas_mc_cps_init(void)
         return STD_ERR(MCAST, FAIL, 0);
     }
     NAS_MC_LOG_DEBUG("NAS-MC-CPS-INIT", "NAS multicast cleanup handler registered");
+
+    if (!std_str_to_ip("0.0.0.0", &ipv4_null_ip)) {
+        NAS_MC_LOG_ERR("NAS-MC-CPS-INIT", "Failed to convert NULL IPv4 string to data");
+        memset(&ipv4_null_ip, 0, sizeof(ipv4_null_ip));
+    }
+    if (!std_str_to_ip("::", &ipv6_null_ip)) {
+        NAS_MC_LOG_ERR("NAS-MC-CPS-INIT", "Failed to convert NULL IPv6 string to data");
+        memset(&ipv6_null_ip, 0, sizeof(ipv6_null_ip));
+    }
 
     return STD_ERR_OK;
 }

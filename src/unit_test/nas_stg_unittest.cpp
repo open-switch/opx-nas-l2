@@ -70,7 +70,7 @@ bool nas_stg_exec_transaction(std::string op,cps_api_transaction_params_t *tran,
     return true;
 }
 
-bool nas_vlan_create(unsigned int vlan_id){
+bool nas_vlan_create(unsigned int vlan_id,bool del){
 
       cps_api_object_t obj = cps_api_object_create();
 
@@ -86,13 +86,19 @@ bool nas_vlan_create(unsigned int vlan_id){
 
       cps_api_transaction_params_t tr;
       if ( cps_api_transaction_init(&tr) != cps_api_ret_code_OK ) return false;
-      if(!nas_stg_exec_transaction(std::string("create"),&tr,obj)) return false;
+
+      if(del){
+          std::string s = std::string("br")+std::to_string(vlan_id);
+          cps_api_object_attr_add(obj,IF_INTERFACES_INTERFACE_NAME,s.c_str(),sizeof(s)+1);
+      }
+
+      if(!nas_stg_exec_transaction(std::string(del ?"delete":"create"),&tr,obj)) return false;
       return true;
 }
 
-bool nas_stg_ut_init(){
+bool nas_stg_ut_init(bool del){
     for (size_t ix = 2 ; ix < 8 ; ++ix){
-        if(!nas_vlan_create(ix)) return false;
+        if(!nas_vlan_create(ix,del)) return false;
     }
     return true;
 }
@@ -170,13 +176,11 @@ bool nas_stg_create_test(){
     const int ids_len = sizeof(ids)/sizeof(ids[0]);
     BASE_STG_INTERFACE_STATE_t stp_state =BASE_STG_INTERFACE_STATE_LEARNING;
 
-    hal_ifindex_t ifindex ;
-    std::cout<<"Enter the ifindex"<<std::endl;
-    std::cin>>ifindex;
+   std::string _ifname = "e101-001-0";
 
     cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&stp_state,sizeof(stp_state));
-    ids[2]= BASE_STG_ENTRY_INTF_IF_INDEX_IFINDEX;
-    cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&ifindex,sizeof(ifindex));
+    ids[2]= BASE_STG_ENTRY_INTF_IF_NAME_IFNAME;
+    cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_BIN,_ifname.c_str(),_ifname.size()+1);
 
     if(cps_api_create(&tran,obj) != cps_api_ret_code_OK ){
          std::cout<<"cps api create failed"<<std::endl;
@@ -225,15 +229,13 @@ bool nas_stg_update_test(){
 
     cps_api_attr_id_t ids[3] = {BASE_STG_ENTRY_INTF, 0,BASE_STG_ENTRY_INTF_STATE };
     const int ids_len = sizeof(ids)/sizeof(ids[0]);
-    BASE_STG_INTERFACE_STATE_t stp_state =(BASE_STG_INTERFACE_STATE_t)BASE_STG_INTERFACE_STATE_LISTENING;
+    BASE_STG_INTERFACE_STATE_t stp_state =(BASE_STG_INTERFACE_STATE_t)BASE_STG_INTERFACE_STATE_FORWARDING;
 
-    std::cout<<"Please Enter ifindex for updating stp state"<<std::endl;
-    hal_ifindex_t ifindex;
-    std::cin>>ifindex;
+    std::string s  ="e101-001-0";
 
     cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&stp_state,sizeof(stp_state));
-    ids[2]= BASE_STG_ENTRY_INTF_IF_INDEX_IFINDEX;
-    cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&ifindex,sizeof(ifindex));
+    ids[2]= BASE_STG_ENTRY_INTF_IF_NAME_IFNAME;
+    cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_BIN,s.c_str(),s.size()+1);
 
     if(!nas_stg_exec_transaction(std::string("set"),&tran,obj)) return false;
 
@@ -279,28 +281,6 @@ bool nas_stg_invalid_del_test(){
    return true;
 }
 
-
-bool nas_stg_bulk_set_test(){
-
-    cps_api_transaction_params_t tran;
-
-   if ( cps_api_transaction_init(&tran) != cps_api_ret_code_OK ) return false;
-
-   cps_api_key_t key;
-   cps_api_key_from_attr_with_qual(&key,BASE_STG_ENTRY_OBJ,cps_api_qualifier_TARGET);
-
-   cps_api_object_t obj = cps_api_object_create();
-
-   if(obj == NULL ) return false;
-   cps_api_object_set_key(obj,&key);
-
-   for(size_t ix = 1 ; ix < 500 ; ++ix ){
-       cps_api_object_attr_add_u32(obj,BASE_STG_ENTRY_VLAN,ix);
-   }
-
-   if(!nas_stg_exec_transaction(std::string("create"),&tran,obj)) return false;
-   return true;
-}
 
 void nas_stg_dump_object_content(cps_api_object_t obj){
     cps_api_object_it_t it;
@@ -473,22 +453,15 @@ bool nas_stg_update_default_test(){
     cps_api_set_key_data(obj,BASE_STG_ENTRY_ID,cps_api_object_ATTR_T_U32,
                                  &default_stg_id,sizeof(default_stg_id));
 
-    uint32_t vid[] = {3,4};
-    for(size_t ix = 0 ; ix < sizeof(vid)/sizeof(vid[0]) ; ++ix ){
-        cps_api_object_attr_add_u32(obj,BASE_STG_ENTRY_VLAN,vid[ix]);
-    }
-
     cps_api_attr_id_t ids[3] = {BASE_STG_ENTRY_INTF, 0,BASE_STG_ENTRY_INTF_STATE };
     const int ids_len = sizeof(ids)/sizeof(ids[0]);
-    BASE_STG_INTERFACE_STATE_t stp_state =(BASE_STG_INTERFACE_STATE_t)BASE_STG_INTERFACE_STATE_LEARNING;
+    BASE_STG_INTERFACE_STATE_t stp_state =(BASE_STG_INTERFACE_STATE_t)BASE_STG_INTERFACE_STATE_FORWARDING;
 
-    std::cout<<"Please Enter ifindex for updating stp state"<<std::endl;
-    hal_ifindex_t ifindex;
-    std::cin>>ifindex;
+    std::string s  ="e101-001-0";
 
     cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&stp_state,sizeof(stp_state));
-    ids[2]= BASE_STG_ENTRY_INTF_IF_INDEX_IFINDEX;
-    cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&ifindex,sizeof(ifindex));
+    ids[2]= BASE_STG_ENTRY_INTF_IF_NAME_IFNAME;
+    cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_BIN,s.c_str(),s.size()+1);
 
     if(!nas_stg_exec_transaction(std::string("set"),&tran,obj)) return false;
 
@@ -499,7 +472,7 @@ bool nas_stg_update_default_test(){
 
 TEST(cps_api_events,stg_test) {
 
-    ASSERT_TRUE(nas_stg_ut_init());
+    ASSERT_TRUE(nas_stg_ut_init(false));
     ASSERT_TRUE(nas_stg_get_default_test());
     ASSERT_TRUE(nas_stg_update_default_test());
 
@@ -511,12 +484,11 @@ TEST(cps_api_events,stg_test) {
     ASSERT_FALSE(nas_stg_invalid_set_test());
     ASSERT_FALSE(nas_stg_invalid_del_test());
 
-    //ASSERT_TRUE(nas_stg_bulk_set_test());
-
     ASSERT_TRUE(nas_stg_get_instance_test());
     ASSERT_TRUE(nas_stg_get_all_test());
 
     ASSERT_TRUE(nas_stg_del_test());
+    ASSERT_TRUE(nas_stg_ut_init(true));
 }
 
 
