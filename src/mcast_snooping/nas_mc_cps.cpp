@@ -167,9 +167,8 @@ static bool nas_mc_route_handler(mc_event_type_t evt_type, hal_vlan_id_t vid, bo
                 }
             }
         }
-        if (!addr_found || !if_found) {
-            NAS_MC_LOG_ERR("NAS-MC-CPS", "Could not find mandatory attributes: %s %s",
-                           addr_found ? "" : "GROUP_IP", if_found ? "" : "INTERFACE");
+        if (!addr_found) {
+            NAS_MC_LOG_ERR("NAS-MC-CPS", "Could not find mandatory attribute GROUP_IP");
             return false;
         }
         bool is_xg = src_ip_list.empty();
@@ -188,9 +187,9 @@ static bool nas_mc_route_handler(mc_event_type_t evt_type, hal_vlan_id_t vid, bo
             NAS_MC_LOG_INFO("NAS-MC-CPS", "%s multicast route entry: VID %d IP %s SRC %s IF %d",
                              add ? "Add" : "Delete", vid, ip_str, src_ip_str, ifindex);
             if (add) {
-                nas_mc_add_route(evt_type, vid, group_ip, is_xg, src_ip, ifindex);
+                nas_mc_add_route(evt_type, vid, group_ip, is_xg, src_ip, if_found, ifindex);
             } else {
-                nas_mc_del_route(evt_type, vid, group_ip, is_xg, src_ip, ifindex);
+                nas_mc_del_route(evt_type, vid, group_ip, is_xg, src_ip, if_found, ifindex);
             }
         }
     }
