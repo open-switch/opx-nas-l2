@@ -327,6 +327,40 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
                 _fill_switch_uft_info(obj, in_uft_mode, l2_size,
                                             l3_size, l3_host_size);
                 break;
+
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_IPV6_EXTENDED_PREFIX_ROUTES:
+                if (qualifier == cps_api_qualifier_OBSERVED)
+                {
+                    if (nas_sw_profile_cur_ipv6_ext_prefix_routes_get(&param.u32)
+                            == STD_ERR_OK)
+                    {
+                        cps_api_object_attr_add_u32(obj, *attr_it,param.u32);
+                    }
+                }
+                else
+                {
+                    if (nas_sw_profile_conf_ipv6_ext_prefix_routes_get(&param.u32)
+                            == STD_ERR_OK)
+                    {
+                        cps_api_object_attr_add_u32(obj, *attr_it,param.u32);
+                    }
+                }
+                break;
+
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_IPV6_EXTENDED_PREFIX_ROUTES:
+                if (nas_sw_profile_max_ipv6_ext_prefix_routes_get(&param.u32)
+                    == STD_ERR_OK) {
+                    cps_api_object_attr_add_u32(obj, *attr_it,param.u32);
+                }
+                break;
+
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_IPV6_EXTENDED_PREFIX_ROUTES_LPM_BLOCK_SIZE:
+                if (nas_sw_profile_ipv6_ext_prefix_route_lpm_blk_size_get(&param.u32)
+                    == STD_ERR_OK) {
+                    cps_api_object_attr_add_u32(obj, *attr_it,param.u32);
+                }
+                break;
+
             default:
                 break;
         }
@@ -470,6 +504,35 @@ static cps_api_return_code_t nas_set_profile(BASE_SWITCH_SWITCHING_ENTITIES_SWIT
     return cps_api_ret_code_OK;
 }
 
+/* Currently this value will be applied only on reboot, this is sent to NDI on next boot init */
+static cps_api_return_code_t nas_set_ipv6_ext_prefix_routes(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t attr,
+        npu_id_t npu, cps_api_object_t obj) {
+
+    uint32_t ipv6_ext_prefix_routes = 0;
+    t_std_error ret;
+
+    cps_api_operation_types_t op_type = cps_api_object_type_operation(cps_api_object_key(obj));
+    cps_api_object_attr_t _attr = cps_api_object_attr_get(obj,attr);
+
+    if (_attr==NULL) return cps_api_ret_code_ERR;
+
+    /* no ipv6-ext-prefix will send CPS set with NULL length,
+       nas_sw_profile_conf_ipv6_ext_prefix_routes_set will treat this as
+       delete and revert to NAS defaults */
+    if (cps_api_object_attr_len(_attr) == 0) {
+        op_type = cps_api_oper_DELETE;
+    } else {
+        ipv6_ext_prefix_routes = cps_api_object_attr_data_u32(_attr);
+    }
+
+    ret = nas_sw_profile_conf_ipv6_ext_prefix_routes_set(ipv6_ext_prefix_routes, op_type);
+    if (ret != STD_ERR_OK)
+    {
+        return cps_api_ret_code_ERR;
+    }
+    return cps_api_ret_code_OK;
+}
+
 static const auto   _set_attr_handlers = new std::unordered_map<cps_api_attr_id_t,
         cps_api_return_code_t (*)(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t, npu_id_t, cps_api_object_t)>{
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAC_AGE_TIMER, _set_generic_u32},
@@ -484,8 +547,8 @@ static const auto   _set_attr_handlers = new std::unordered_map<cps_api_attr_id_
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_PROFILE, nas_set_profile },
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE, nas_set_uft_mode },
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECN_ECT_THRESHOLD_ENABLE, _set_generic_u32 },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_IPV6_EXTENDED_PREFIX_ROUTES, nas_set_ipv6_ext_prefix_routes },
 };
-
 
 static void remove_same_values(cps_api_object_t now, cps_api_object_t req) {
     cps_api_object_it_t it;
@@ -498,7 +561,9 @@ static void remove_same_values(cps_api_object_t now, cps_api_object_t req) {
          */
         if ((id == BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_ECMP_ENTRY_PER_GROUP) ||
             (id == BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_PROFILE) ||
-            (id == BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE)) continue;
+            (id == BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE) ||
+            (id == BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_IPV6_EXTENDED_PREFIX_ROUTES))
+            continue;
 
         if (_set_attr_handlers->find(id)==_set_attr_handlers->end()) continue;
 

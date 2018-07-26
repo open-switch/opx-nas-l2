@@ -86,9 +86,11 @@ void nas_mac_add_event_entry_to_obj(cps_api_object_t obj,nas_mac_entry_t & entry
     cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&entry.ifindex,sizeof(entry.ifindex));
     ids[2] = BASE_MAC_LIST_ENTRIES_ACTIONS;
     cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&entry.pkt_action,sizeof(entry.pkt_action));
-    ids[2] = BASE_MAC_LIST_ENTRIES_VLAN;
-    cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U16,&entry.entry_key.vlan_id,
+    if(entry.entry_type != NDI_MAC_ENTRY_TYPE_1D_REMOTE){
+        ids[2] = BASE_MAC_LIST_ENTRIES_VLAN;
+        cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U16,&entry.entry_key.vlan_id,
                      sizeof(entry.entry_key.vlan_id));
+    }
     ids[2] = BASE_MAC_LIST_ENTRIES_MAC_ADDRESS;
     cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_BIN,(void*)&entry.entry_key.mac_addr,
          sizeof(entry.entry_key.mac_addr));
@@ -98,17 +100,50 @@ void nas_mac_add_event_entry_to_obj(cps_api_object_t obj,nas_mac_entry_t & entry
     ids[2] = BASE_MAC_LIST_ENTRIES_EVENT_TYPE;
     cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&ev_type,sizeof(ev_type));
 
-
     interface_ctrl_t intf_ctrl;
-    memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
 
-    intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
-    intf_ctrl.if_index = entry.ifindex;
+    if(entry.entry_type != NDI_MAC_ENTRY_TYPE_1D_REMOTE){
+        memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
 
-    if(dn_hal_get_interface_info(&intf_ctrl) == STD_ERR_OK) {
-     ids[2] = BASE_MAC_LIST_ENTRIES_IFNAME;
-     cps_api_object_e_add(obj,ids ,ids_len,cps_api_object_ATTR_T_BIN, (const void *)intf_ctrl.if_name,
-                                strlen(intf_ctrl.if_name)+1);
+        intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
+        intf_ctrl.if_index = entry.ifindex;
+
+        if(dn_hal_get_interface_info(&intf_ctrl) == STD_ERR_OK) {
+         ids[2] = BASE_MAC_LIST_ENTRIES_IFNAME;
+         cps_api_object_e_add(obj,ids ,ids_len,cps_api_object_ATTR_T_BIN, (const void *)intf_ctrl.if_name,
+                                    strlen(intf_ctrl.if_name)+1);
+        }
+    }
+
+    if(entry.entry_type != NDI_MAC_ENTRY_TYPE_1Q){
+        memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
+
+        intf_ctrl.q_type = HAL_INTF_INFO_FROM_BRIDGE_ID;
+        intf_ctrl.bridge_id = entry.bridge_id;
+        intf_ctrl.int_type = nas_int_type_DOT1D_BRIDGE;
+
+        if(dn_hal_get_interface_info(&intf_ctrl) == STD_ERR_OK) {
+            ids[2] = BASE_MAC_LIST_ENTRIES_BR_NAME;
+            cps_api_object_e_add(obj,ids ,ids_len,cps_api_object_ATTR_T_BIN, (const void *)intf_ctrl.if_name,
+                                    strlen(intf_ctrl.if_name)+1);
+        }
+    }
+
+    if(entry.entry_type == NDI_MAC_ENTRY_TYPE_1D_REMOTE){
+        ids[2] = BASE_MAC_LIST_ENTRIES_ENDPOINT_IP_ADDR_FAMILY;
+        cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&entry.endpoint_ip.af_index,
+                             sizeof(entry.endpoint_ip.af_index));
+        ids[2] = BASE_MAC_LIST_ENTRIES_ENDPOINT_IP_ADDR;
+        cps_api_object_e_add(obj,ids ,ids_len,cps_api_object_ATTR_T_BIN, (const void *)&entry.endpoint_ip.u,
+                                            sizeof(entry.endpoint_ip.u));
+
+        ids[2] = BASE_MAC_LIST_ENTRIES_IFNAME;
+        std::string _vtep_name;
+        if(nas_mac_get_vtep_name_from_tunnel_id(entry.endpoint_ip_id,_vtep_name)){
+             cps_api_object_e_add(obj,ids ,ids_len,cps_api_object_ATTR_T_BIN, (const void *)_vtep_name.c_str(),
+                                                _vtep_name.size()+1);
+        }
+
     }
 
 }

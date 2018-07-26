@@ -32,9 +32,13 @@
 #include "nas_ndi_mac.h"
 #include "std_mutex_lock.h"
 #include "std_condition_variable.h"
+#include "nas_base_utils.h"
+#include "std_ip_utils.h"
 
 #include <unordered_map>
 #include <list>
+#include <unordered_set>
+#include <string>
 
 #define NAS_MAC_LOG(type, msg, ...)\
                     EV_LOGGING( L2MAC,type, "", msg, ##__VA_ARGS__)
@@ -60,15 +64,22 @@ struct nas_mac_entry_key {
     }
 };
 
-typedef struct {
-    nas_mac_entry_key           entry_key;
-    hal_ifindex_t               ifindex;
+struct nas_mac_entry_t {
+    nas_mac_entry_key           entry_key = {0};
+    hal_ifindex_t               ifindex=0;
+    hal_ifindex_t               bridge_ifindex=0;
+    ndi_obj_id_t                bridge_id=0;
+    hal_ip_addr_t               endpoint_ip={0};
+    ndi_mac_entry_type_t        entry_type;
+    ndi_obj_id_t                endpoint_ip_id;
     BASE_MAC_PACKET_ACTION_t    pkt_action;
     npu_id_t                    learned_from_npu;
     bool                        npu_configured=true;
     bool                        os_configured=false;
     bool                        is_static = false;
-}nas_mac_entry_t;
+    bool                        publish=false;
+    bool                        cache=false;
+};
 
 typedef enum{
     NAS_MAC_ADD=0,
@@ -92,14 +103,40 @@ typedef struct {
     ndi_mac_delete_type_t del_type;
     nas_l2_mac_op_t op_type;
     bool static_type;
-    bool subtype_all;
-
 }nas_mac_cps_event_t;
 
 typedef struct{
     nas_l2_mac_op_t op_type;
     nas_mac_entry_t entry;
 }nas_mac_npu_event_t;
+
+typedef struct vni_rem_ip{
+    std::string ip;
+    hal_ifindex_t br_index;
+
+    bool operator== (const vni_rem_ip & rhs)  const
+    {
+        if (br_index != rhs.br_index) return false;
+        if(ip != rhs.ip) return false;
+        return true;
+    };
+
+
+    bool operator <(const vni_rem_ip & rhs) const
+    {
+        return (br_index < rhs.br_index )||
+                ((br_index == rhs.br_index) && (ip< rhs.ip));
+
+    };
+
+    vni_rem_ip(hal_ip_addr_t &rip, hal_ifindex_t rbr_index){
+        br_index = rbr_index;
+        char buff[HAL_INET6_TEXT_LEN + 1];
+        if(std_ip_to_string(&rip,buff,HAL_INET6_TEXT_LEN)){
+            ip = std::string(buff);
+        }
+    }
+}vni_rem_ip_t;
 
 typedef std::list<nas_mac_npu_event_t> nas_mac_npu_event_queue_t;
 
@@ -123,8 +160,7 @@ t_std_error nas_mac_handle_if_down(hal_ifindex_t ifindex);
 void nas_l2_mac_req_handler(void);
 
 /* Delete the mac entry from hw */
-t_std_error nas_mac_delete_entries_from_hw(nas_mac_entry_t *entry,ndi_mac_delete_type_t del_type,
-                                                  bool subtype_all);
+t_std_error nas_mac_delete_entries_from_hw(nas_mac_entry_t *entry,ndi_mac_delete_type_t del_type);
 
 /* Initialize the event thread handle */
 t_std_error nas_mac_event_handle_init();
@@ -160,5 +196,17 @@ t_std_error nas_mac_update_entry_in_os(nas_mac_entry_t *entry,cps_api_operation_
 void nas_mac_flush_count_dump(void);
 
 bool nas_mac_publish_flush_event(ndi_mac_delete_type_t del_type, nas_mac_entry_t * entry);
+
+bool nas_mac_process_os_event(nas_mac_entry_t & entry, nas::attr_set_t & attr,cps_api_operation_types_t op);
+
+bool _process_remote_endpint(const char * vtep_name, hal_ip_addr_t & ip_addr, ndi_obj_id_t tunnel_id,bool add);
+
+bool _get_endpoint_tunnel_id(vni_rem_ip_t & _rem_ip, ndi_obj_id_t & obj_id);
+
+bool nas_mac_get_vtep_name_from_tunnel_id(ndi_obj_id_t id, std::string & s);
+
+bool _process_bridge_event(const char * br_name, const char * vtep_name, bool add);
+
+bool nas_mac_update_remote_macs_cache(nas_mac_entry_t & entry,bool add);
 
 #endif /* NAS_MAC_API_H */

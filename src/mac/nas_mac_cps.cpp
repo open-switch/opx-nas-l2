@@ -36,6 +36,12 @@
 #include "hal_if_mapping.h"
 #include "cps_api_interface_types.h"
 #include "std_thread_tools.h"
+#include "ds_common_types.h"
+#include "std_mac_utils.h"
+#include "std_ip_utils.h"
+#include "dell-base-routing.h"
+#include "os-routing-events.h"
+#include "bridge-model.h"
 
 #include "cps_api_object.h"
 #include "cps_api_object_category.h"
@@ -138,7 +144,6 @@ static void nas_mac_entry_to_cps_obj(cps_api_object_list_t list, nas_mac_entry_t
 static cps_api_return_code_t cps_nas_mac_get_function (void * context, cps_api_get_params_t * param, size_t ix) {
 
     nas_mac_entry_t mac_entry;
-    memset(&mac_entry, 0, sizeof(mac_entry));
 
     cps_api_object_t filt = cps_api_object_list_get(param->filters,ix);
     if(filt){
@@ -279,6 +284,26 @@ static t_std_error cps_nas_mac_init(cps_api_operation_handle_t handle) {
     if (cps_api_register(&f)!=cps_api_ret_code_OK) {
         return STD_ERR(MAC,FAIL,0);
     }
+
+    memset(&f,0,sizeof(f));
+
+    if (!cps_api_key_from_attr_with_qual(&f.key, BASE_MAC_FORWARDING_TABLE_OBJ, cps_api_qualifier_TARGET)) {
+        NAS_MAC_LOG(ERR, "Could not translate %d to key %s,", (int)(BASE_MAC_TABLE_OBJ),
+                    cps_api_key_print(&f.key, buff, sizeof(buff)-1));
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+    NAS_MAC_LOG(DEBUG, "Registering for BASE_MAC_VNI_TABLE_OBJ %s",
+                cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+
+    f.handle = handle;
+    f._write_function = cps_nas_mac_set_function;
+
+    if (cps_api_register(&f)!=cps_api_ret_code_OK) {
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+
 
     memset(&f,0,sizeof(f));
 
@@ -477,6 +502,70 @@ static bool nas_mac_vlan_event_cb(cps_api_object_t obj, void *param)
     return true;
 }
 
+static bool nas_mac_fdb_event_cb(cps_api_object_t obj, void *param)
+{
+
+    nas_mac_entry_t entry;
+    nas::attr_set_t attrs;
+    cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
+    if(op != cps_api_oper_CREATE and op != cps_api_oper_DELETE){
+        return true;
+    }
+
+    NAS_MAC_LOG(INFO,"FDB event cb operation type %d",op);
+
+    cps_api_object_it_t it;
+    cps_api_attr_id_t id = 0;
+    cps_api_object_it_begin(obj,&it);
+
+    for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
+        id = cps_api_object_attr_id(it.attr);
+
+        switch (id) {
+        case BASE_ROUTE_OBJ_NBR_AF:
+            /*
+             * Only process AF_BRIDGE family message
+             */
+
+            if(cps_api_object_attr_data_uint(it.attr) != AF_BRIDGE){
+                return true;
+            }
+            break;
+
+        case BASE_ROUTE_OBJ_NBR_ADDRESS:
+        {
+            size_t len = cps_api_object_attr_len(it.attr);
+            entry.endpoint_ip.af_index = (len == HAL_INET4_LEN) ? HAL_INET4_FAMILY : HAL_INET6_FAMILY;
+            memcpy(&entry.endpoint_ip.u,cps_api_object_attr_data_bin(it.attr),
+                    sizeof(entry.endpoint_ip.u));
+            attrs.add(BASE_MAC_FORWARDING_TABLE_ENDPOINT_IP);
+            attrs.add(BASE_MAC_FORWARDING_TABLE_ENDPOINT_IP_ADDR_FAMILY);
+        }
+            break;
+
+        case BASE_ROUTE_OBJ_NBR_MAC_ADDR:
+            std_string_to_mac(&entry.entry_key.mac_addr, (char*)cps_api_object_attr_data_bin(it.attr),
+                               cps_api_object_attr_len(it.attr));
+            attrs.add(BASE_MAC_TABLE_MAC_ADDRESS);
+            break;
+
+        case BASE_ROUTE_OBJ_NBR_IFINDEX:
+            entry.ifindex = cps_api_object_attr_data_uint(it.attr);
+            attrs.add(BASE_MAC_TABLE_IFINDEX);
+            break;
+        }
+    }
+    entry.cache = true;
+    if(attrs.contains(BASE_MAC_FORWARDING_TABLE_ENDPOINT_IP)){
+        return nas_mac_process_os_event(entry,attrs,op);
+    }
+
+    return true;
+
+}
+
+
+
 static bool nas_mac_if_vlan_state_event_cb(cps_api_object_t obj, void * param){
     cps_api_object_attr_t vlan_attr = cps_api_object_attr_get(obj, BASE_IF_VLAN_IF_INTERFACES_INTERFACE_ID);
     cps_api_object_attr_t bridge_attr = cps_api_object_attr_get(obj, DELL_BASE_IF_CMN_IF_INTERFACES_INTERFACE_IF_INDEX);
@@ -504,6 +593,97 @@ static bool nas_mac_if_vlan_state_event_cb(cps_api_object_t obj, void * param){
     }
 
     return true;
+}
+
+
+static bool nas_mac_endpoint_ev_cb(cps_api_object_t obj, void *param)
+{
+
+    cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
+
+    bool add = (op == cps_api_oper_DELETE)? false : true;
+
+    ndi_obj_id_t tunnel_obj_id = 0;
+    hal_ip_addr_t ip_addr;
+    memset(&ip_addr,0,sizeof(ip_addr));
+
+    cps_api_object_attr_t vtep_attr = cps_api_get_key_data(obj,IF_INTERFACES_INTERFACE_NAME);
+    cps_api_object_attr_t tunnel_id_attr = cps_api_object_attr_get(obj,DELL_IF_IF_INTERFACES_INTERFACE_REMOTE_ENDPOINT_TUNNEL_ID);
+    if(!vtep_attr) {
+        return true;
+    }
+    if ((add)  && (!tunnel_id_attr)) {
+        return true;
+    }
+
+    const char * vtep_name = (const char *)cps_api_object_attr_data_bin(vtep_attr);
+
+    cps_api_object_it_t it;
+    cps_api_attr_id_t id = 0;
+    cps_api_object_it_begin(obj,&it);
+
+    for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
+        id = cps_api_object_attr_id(it.attr);
+
+        switch (id) {
+        case DELL_IF_IF_INTERFACES_INTERFACE_REMOTE_ENDPOINT_TUNNEL_ID:
+            tunnel_obj_id = cps_api_object_attr_data_u64(it.attr);
+            break;
+
+        case DELL_IF_IF_INTERFACES_INTERFACE_REMOTE_ENDPOINT_ADDR_FAMILY :
+            ip_addr.af_index = cps_api_object_attr_data_uint(it.attr);
+            break;
+
+        case DELL_IF_IF_INTERFACES_INTERFACE_REMOTE_ENDPOINT_ADDR:
+            memcpy(&ip_addr.u,cps_api_object_attr_data_bin(it.attr),
+                    cps_api_object_attr_len(it.attr));
+            break;
+        }
+    }
+
+    if (tunnel_obj_id == 0) {
+        /* If tunnel ID is 0 then consider it deletion of tunnel ID case  */
+        add = false;
+    }
+
+    return _process_remote_endpint(vtep_name,ip_addr,tunnel_obj_id,add);
+
+}
+
+static bool nas_mac_bridge_ev_cb(cps_api_object_t obj, void *param)
+{
+
+    cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
+    if(op != cps_api_oper_CREATE and op != cps_api_oper_DELETE){
+        return true;
+    }
+
+    cps_api_object_attr_t br_attr = cps_api_get_key_data(obj,BRIDGE_DOMAIN_BRIDGE_NAME);
+    if(!br_attr){
+        return true;
+    }
+
+    const char * bridge_name = (const char *)cps_api_object_attr_data_bin(br_attr);
+    const char * vtep_name = nullptr;
+    cps_api_object_it_t it;
+    cps_api_attr_id_t id = 0;
+    cps_api_object_it_begin(obj,&it);
+
+    for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
+        id = cps_api_object_attr_id(it.attr);
+
+        switch (id) {
+        case BRIDGE_DOMAIN_BRIDGE_MEMBER_INTERFACE:
+            vtep_name = (const char *)cps_api_object_attr_data_bin(it.attr);
+            break;
+        }
+
+    }
+
+    if(!vtep_name or !bridge_name) return true;
+
+    return _process_bridge_event(bridge_name,vtep_name, op == cps_api_oper_CREATE ? true: false);
+
 }
 
 static bool nas_mac_if_event_cb(cps_api_object_t obj, void *param)
@@ -721,6 +901,62 @@ t_std_error nas_mac_reg_vlan_event (void) {
 }
 
 
+t_std_error nas_mac_reg_fdb_event (void) {
+
+    cps_api_event_reg_t reg;
+    cps_api_key_t key;
+    memset(&reg,0,sizeof(reg));
+
+    reg.number_of_objects = 1;
+    reg.objects = &key;
+    cps_api_key_from_attr_with_qual(&key, OS_RE_BASE_ROUTE_OBJ_NBR_OBJ,
+                                       cps_api_qualifier_OBSERVED);
+    if (cps_api_event_thread_reg(&reg, nas_mac_fdb_event_cb,NULL)!=cps_api_ret_code_OK) {
+        NAS_MAC_LOG(ERR, "Could not register for fdb events");
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+    return STD_ERR_OK;
+}
+
+
+static t_std_error nas_mac_reg_endpoint_event(void){
+    cps_api_event_reg_t reg;
+    cps_api_key_t key;
+    memset(&reg,0,sizeof(reg));
+
+    reg.number_of_objects = 1;
+    reg.objects = &key;
+    cps_api_key_from_attr_with_qual(&key, DELL_IF_IF_INTERFACES_INTERFACE_REMOTE_ENDPOINT,
+                                       cps_api_qualifier_OBSERVED);
+    if (cps_api_event_thread_reg(&reg, nas_mac_endpoint_ev_cb,NULL)!=cps_api_ret_code_OK) {
+        NAS_MAC_LOG(ERR, "Could not register for fdb events");
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+    return STD_ERR_OK;
+
+}
+
+static t_std_error nas_mac_reg_bridge_event(void){
+    cps_api_event_reg_t reg;
+    cps_api_key_t key;
+    memset(&reg,0,sizeof(reg));
+
+    reg.number_of_objects = 1;
+    reg.objects = &key;
+    cps_api_key_from_attr_with_qual(&key, BRIDGE_DOMAIN_BRIDGE_OBJ,
+                                       cps_api_qualifier_OBSERVED);
+    if (cps_api_event_thread_reg(&reg, nas_mac_bridge_ev_cb,NULL)!=cps_api_ret_code_OK) {
+        NAS_MAC_LOG(ERR, "Could not register for fdb events");
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+    return STD_ERR_OK;
+
+}
+
+
 t_std_error nas_mac_init(cps_api_operation_handle_t handle) {
 
     std_thread_create_param_t nas_l2_mac_req_handler_thr;
@@ -763,6 +999,10 @@ t_std_error nas_mac_init(cps_api_operation_handle_t handle) {
         return STD_ERR(MAC,FAIL,0);
     }
 
+    if ((rc = nas_mac_reg_fdb_event()) != STD_ERR_OK) {
+            return STD_ERR(MAC,FAIL,0);
+    }
+
     if ((rc = nas_mac_reg_if_event()) != STD_ERR_OK) {
         return STD_ERR(MAC,FAIL,0);
     }
@@ -772,6 +1012,14 @@ t_std_error nas_mac_init(cps_api_operation_handle_t handle) {
     }
 
     if((rc = nas_mac_event_handle_init() != STD_ERR_OK)){
+        return rc;
+    }
+
+    if((rc = nas_mac_reg_bridge_event() != STD_ERR_OK)){
+        return rc;
+    }
+
+    if((rc = nas_mac_reg_endpoint_event())!= STD_ERR_OK){
         return rc;
     }
 

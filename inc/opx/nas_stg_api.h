@@ -231,4 +231,6 @@ t_std_error nas_stg_set_default_instance_state(cps_api_object_t obj);
 
 t_std_error nas_stg_set_interface_default_state(npu_id_t npu,port_t port);
 
+t_std_error nas_stg_set_vlan_member_port_state(hal_vlan_id_t vlan_id, hal_ifindex_t ifindex);
+
 #endif /* NAS_STG_API_H */

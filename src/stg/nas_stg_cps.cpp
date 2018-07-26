@@ -359,6 +359,53 @@ bool nas_stg_process_phy_port_events(cps_api_object_t obj, void *param) {
 }
 
 
+static bool nas_stg_vlan_member_event_cb(cps_api_object_t obj, void *param)
+{
+    cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
+    if (op != cps_api_oper_CREATE) {
+        return true;
+    }
+
+    cps_api_object_it_t it;
+
+    hal_vlan_id_t vlan_id = 0;
+    hal_ifindex_t port_index = 0;
+
+
+    cps_api_object_attr_t vlan_id_attr = cps_api_object_attr_get(obj, BASE_IF_VLAN_IF_INTERFACES_INTERFACE_ID);
+
+    if(vlan_id_attr == NULL) {
+        NAS_STG_LOG(DEBUG, "Missing Vlan ID for CPS Set");
+        return true;
+    }
+
+    vlan_id = (hal_vlan_id_t) cps_api_object_attr_data_u16(vlan_id_attr);
+
+
+    if (!vlan_id) return true;
+
+    cps_api_object_it_begin(obj,&it);
+    for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
+
+        switch ((int) cps_api_object_attr_id(it.attr)) {
+
+        case DELL_IF_IF_INTERFACES_INTERFACE_UNTAGGED_PORTS:
+        case DELL_IF_IF_INTERFACES_INTERFACE_TAGGED_PORTS:
+
+            port_index = (hal_ifindex_t) cps_api_object_attr_data_u32(it.attr);
+            nas_stg_set_vlan_member_port_state(vlan_id, port_index);
+            break;
+
+         default:
+             break;
+        }
+    }
+
+
+    NAS_STG_LOG(DEBUG, "Port vlan membership event processing done .. ");
+    return true;
+}
+
 static t_std_error nas_stg_lag_register() {
     cps_api_event_reg_t reg;
     memset(&reg,0,sizeof(reg));
@@ -411,6 +458,37 @@ static t_std_error nas_stg_phy_port_register() {
 
     if (cps_api_event_thread_reg(&reg, nas_stg_process_phy_port_events, NULL)!=cps_api_ret_code_OK) {
         NAS_STG_LOG(ERR,"Failed to register for phy ports events updates");
+        return STD_ERR(STG,FAIL,0);
+    }
+
+    return STD_ERR_OK;
+}
+
+t_std_error nas_stg_reg_vlan_member_event (void) {
+    cps_api_event_reg_t reg;
+    cps_api_key_t key;
+
+    memset(&reg,0,sizeof(reg));
+
+    cps_api_key_from_attr_with_qual(&key, DELL_IF_IF_INTERFACES_INTERFACE_UNTAGGED_PORTS,
+                                    cps_api_qualifier_OBSERVED);
+
+    reg.number_of_objects = 1;
+    reg.objects = &key;
+
+    if (cps_api_event_thread_reg(&reg, nas_stg_vlan_member_event_cb,NULL)!=cps_api_ret_code_OK) {
+        NAS_STG_LOG(ERR, "Could not register for vlan member port events");
+        return STD_ERR(STG,FAIL,0);
+    }
+
+    cps_api_key_from_attr_with_qual(&key, DELL_IF_IF_INTERFACES_INTERFACE_TAGGED_PORTS,
+                                    cps_api_qualifier_OBSERVED);
+
+    reg.number_of_objects = 1;
+    reg.objects = &key;
+
+    if (cps_api_event_thread_reg(&reg, nas_stg_vlan_member_event_cb,NULL)!=cps_api_ret_code_OK) {
+        NAS_STG_LOG(ERR, "Could not register for vlan events");
         return STD_ERR(STG,FAIL,0);
     }
 
@@ -499,6 +577,8 @@ t_std_error nas_stg_init(cps_api_operation_handle_t handle) {
     if ((rc = nas_stg_vlan_register()) != STD_ERR_OK) return rc;
 
     if ((rc = nas_stg_phy_port_register()) != STD_ERR_OK) return rc;
+
+    if((rc = nas_stg_reg_vlan_member_event()) != STD_ERR_OK) return rc;
 
     return (rc);
 }

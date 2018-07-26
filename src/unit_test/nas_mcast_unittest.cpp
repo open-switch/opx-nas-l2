@@ -30,6 +30,7 @@
 #include "dell-base-if-vlan.h"
 #include "dell-interface.h"
 #include "ietf-igmp-mld-snooping.h"
+#include "l2-multicast.h"
 #include "std_ip_utils.h"
 #include <iostream>
 #include <string>
@@ -47,15 +48,15 @@ static const string ROUTE_IF_NAME_2{"e101-005-0"};
 static const string ROUTE_LAG_IF_NAME{"bond9"};
 static const string LAG_IF_NAME_1{"e101-003-0"};
 static const string LAG_IF_NAME_2{"e101-004-0"};
-static std::vector<std::string> TEST_NULL_LIST = {};
-static std::vector<std::string> TEST_GRP_IPV4 = {"228.0.0.8"};
-static std::vector<std::string> TEST_SRC_IPV4 = {"8.8.8.8"};
-static std::vector<std::string> TEST_GRP_IPV6 = {"ff0e::8888"};
-static std::vector<std::string> TEST_SRC_IPV6 = {"8888::8888"};
-static std::vector<std::string> TEST_GRP_IPV4_LIST = {"225.0.0.5", "225.0.0.6", "225.0.0.7"};
-static std::vector<std::string> TEST_SRC_IPV4_LIST = {"5.5.5.5", "6.6.6.6", "7.7.7.7"};
-static std::vector<std::string> TEST_GRP_IPV6_LIST = {"ff0e::5", "ff0e::6", "ff0e::7"};
-static std::vector<std::string> TEST_SRC_IPV6_LIST = {"5555::5555", "6666::6666", "7777::7777"};
+static vector<string> TEST_NULL_LIST = {};
+static vector<string> TEST_GRP_IPV4 = {"228.0.0.8"};
+static vector<string> TEST_SRC_IPV4 = {"8.8.8.8"};
+static vector<string> TEST_GRP_IPV6 = {"ff0e::8888"};
+static vector<string> TEST_SRC_IPV6 = {"8888::8888"};
+static vector<string> TEST_GRP_IPV4_LIST = {"225.0.0.5", "225.0.0.6", "225.0.0.7"};
+static vector<string> TEST_SRC_IPV4_LIST = {"5.5.5.5", "6.6.6.6", "7.7.7.7"};
+static vector<string> TEST_GRP_IPV6_LIST = {"ff0e::5", "ff0e::6", "ff0e::7"};
+static vector<string> TEST_SRC_IPV6_LIST = {"5555::5555", "6666::6666", "7777::7777"};
 static const string IGMP_MROUTER_IF_NAME{"e101-010-0"};
 static const string MLD_MROUTER_IF_NAME{"e101-011-0"};
 static const uint_t IGMP_PROTO_ID = 2;
@@ -528,8 +529,8 @@ static bool event_service_deinit()
 }
 
 static bool send_mc_update_event(hal_vlan_id_t vlan_id, const string& if_name,
-                                 std::vector<std::string> &group_ip,
-                                 std::vector<std::string> &src_ip,
+                                 vector<string> &group_ip,
+                                 vector<string> &src_ip,
                                  bool ipv4, bool mrouter, bool add)
 {
     bool event_start_internal;
@@ -586,9 +587,11 @@ static bool send_mc_update_event(hal_vlan_id_t vlan_id, const string& if_name,
         } else {
             for (cps_api_attr_id_t g = 0; g < group_ip.size();g++) {
                 cps_api_attr_id_t ids[3] = {grp_id, g, rt_if_attr_id};
-                if (!cps_api_object_e_add(obj, ids, 3, cps_api_object_ATTR_T_BIN, if_name.c_str(), if_name.size() + 1)) {
-                    cout << "Failed to set mc entry interface name" << endl;
-                    break;
+                if (if_name.length() > 0) {
+                    if (!cps_api_object_e_add(obj, ids, 3, cps_api_object_ATTR_T_BIN, if_name.c_str(), if_name.size() + 1)) {
+                        cout << "Failed to set mc entry interface name" << endl;
+                        break;
+                    }
                 }
                 ids[2] = gip_attr_id;
                 if (!cps_api_object_e_add(obj, ids, 3, cps_api_object_ATTR_T_BIN, group_ip[g].c_str(), group_ip[g].size() + 1)) {
@@ -698,9 +701,9 @@ static line_mark_t mld_entry_check(const string& line)
     return line_mark_t::NONE;
 }
 
-static void right_trim(std::string& in_str)
+static void right_trim(string& in_str)
 {
-    std::string t{" \t\n\r"};
+    string t{" \t\n\r"};
     in_str.erase(in_str.find_last_not_of(t) + 1);
 }
 
@@ -870,6 +873,30 @@ static void dump_mc_entry_list()
     }
 }
 
+static void cleanup_intf_l2mc_config(hal_vlan_id_t vlan_id, const string& if_name)
+{
+    cps_api_transaction_params_t params;
+    cps_api_object_t             obj;
+    cps_api_key_t                keys;
+
+    ASSERT_TRUE((obj = cps_api_object_create()) != NULL);
+    cps_api_object_guard obj_g (obj);
+    ASSERT_TRUE(cps_api_transaction_init(&params) == cps_api_ret_code_OK);
+
+    cps_api_transaction_guard tgd(&params);
+    cps_api_key_from_attr_with_qual(&keys, BASE_L2_MCAST_CLEANUP_L2MC_MEMBER_OBJ,
+                                    cps_api_qualifier_TARGET);
+    cps_api_object_set_key(obj, &keys);
+    cps_api_object_attr_add(obj, BASE_L2_MCAST_CLEANUP_L2MC_MEMBER_INPUT_IFNAME,
+                            if_name.c_str(), if_name.length() + 1);
+    cps_api_object_attr_add_u32(obj,  BASE_L2_MCAST_CLEANUP_L2MC_MEMBER_INPUT_VLAN_ID, vlan_id);
+
+    ASSERT_TRUE(cps_api_action(&params, obj) == cps_api_ret_code_OK);
+
+    obj_g.release();
+    ASSERT_TRUE(cps_api_commit(&params) == cps_api_ret_code_OK);
+}
+
 // match: igmp, action: trap_to_cpu
 TEST(nas_mc, acl_rule_check)
 {
@@ -901,7 +928,7 @@ TEST(nas_mc, acl_rule_check)
         }
     }
 
-    ASSERT_TRUE(found);
+    // ASSERT_TRUE(found);
 }
 
 TEST(nas_mc, create_lag_and_member)
@@ -1018,6 +1045,196 @@ TEST(nas_mc, send_mrouter_del_event)
 {
     ASSERT_TRUE(send_mc_update_event(TEST_VID, IGMP_MROUTER_IF_NAME, TEST_NULL_LIST, TEST_NULL_LIST, true, true, false));
     ASSERT_TRUE(send_mc_update_event(TEST_VID, MLD_MROUTER_IF_NAME, TEST_NULL_LIST, TEST_NULL_LIST, false, true, false));
+}
+
+// Test on non-OIF multicast routing configuration
+
+TEST(nas_mc, send_ipv4_non_oif_route_add_event)
+{
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV4, TEST_NULL_LIST,true, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV4, TEST_SRC_IPV4,true, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV4, TEST_SRC_IPV4_LIST,true, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV4_LIST, TEST_SRC_IPV4_LIST,true, false, true));
+}
+
+TEST(nas_mc, send_ipv6_non_oif_route_add_event)
+{
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV6,TEST_NULL_LIST, false, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV6,TEST_SRC_IPV6, false, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV6,TEST_SRC_IPV6_LIST, false, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV6_LIST,TEST_SRC_IPV6_LIST, false, false, true));
+}
+
+// All entries created should not link to group with member ports
+
+TEST(nas_mc, validate_igmp_non_oif_entry)
+{
+    mc_entry_list.clear();
+    ASSERT_TRUE(run_command("hshell -c \"ipmc table show\"", igmp_entry_check, igmp_entry_proc));
+    ASSERT_TRUE(mc_entry_list.size() > 0);
+    ASSERT_TRUE(run_command("hshell -c \"mc show\"", mc_group_check, mc_group_proc));
+    dump_mc_entry_list();
+    for (auto& entry: mc_entry_list) {
+        ASSERT_TRUE(entry.port_list.empty());
+    }
+}
+
+TEST(nas_mc, validate_mld_non_oif_entry)
+{
+    mc_entry_list.clear();
+    ASSERT_TRUE(run_command("hshell -c \"ipmc ip6table show\"", mld_entry_check, mld_entry_proc));
+    ASSERT_TRUE(mc_entry_list.size() > 0);
+    ASSERT_TRUE(run_command("hshell -c \"mc show\"", mc_group_check, mc_group_proc));
+    dump_mc_entry_list();
+    for (auto& entry: mc_entry_list) {
+        ASSERT_TRUE(entry.port_list.empty());
+    }
+}
+
+// Add mrouter port to make non-OIF entry not use default group
+
+TEST(nas_mc, send_mrouter_add_event_1)
+{
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, IGMP_MROUTER_IF_NAME, TEST_NULL_LIST, TEST_NULL_LIST, true, true, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, MLD_MROUTER_IF_NAME, TEST_NULL_LIST, TEST_NULL_LIST, false, true, true));
+}
+
+// Non-OIF entries should link to group with mrouter port members
+
+TEST(nas_mc, validate_igmp_entry_1)
+{
+    mc_entry_list.clear();
+    ASSERT_TRUE(run_command("hshell -c \"ipmc table show\"", igmp_entry_check, igmp_entry_proc));
+    ASSERT_TRUE(mc_entry_list.size() > 0);
+    ASSERT_TRUE(run_command("hshell -c \"mc show\"", mc_group_check, mc_group_proc));
+    dump_mc_entry_list();
+    for (auto& entry: mc_entry_list) {
+        ASSERT_TRUE(!entry.port_list.empty());
+    }
+}
+
+TEST(nas_mc, validate_mld_entry_1)
+{
+    mc_entry_list.clear();
+    ASSERT_TRUE(run_command("hshell -c \"ipmc ip6table show\"", mld_entry_check, mld_entry_proc));
+    ASSERT_TRUE(mc_entry_list.size() > 0);
+    ASSERT_TRUE(run_command("hshell -c \"mc show\"", mc_group_check, mc_group_proc));
+    dump_mc_entry_list();
+    for (auto& entry: mc_entry_list) {
+        ASSERT_TRUE(!entry.port_list.empty());
+    }
+}
+
+// Delete mrouter port to make non-OIF entry use default group again
+
+TEST(nas_mc, send_mrouter_del_event_1)
+{
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, IGMP_MROUTER_IF_NAME, TEST_NULL_LIST, TEST_NULL_LIST, true, true, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, MLD_MROUTER_IF_NAME, TEST_NULL_LIST, TEST_NULL_LIST, false, true, false));
+}
+
+// Non-OIF entries should be changed back to link to group with no port member
+
+TEST(nas_mc, validate_igmp_non_oif_entry_1)
+{
+    mc_entry_list.clear();
+    ASSERT_TRUE(run_command("hshell -c \"ipmc table show\"", igmp_entry_check, igmp_entry_proc));
+    ASSERT_TRUE(mc_entry_list.size() > 0);
+    ASSERT_TRUE(run_command("hshell -c \"mc show\"", mc_group_check, mc_group_proc));
+    dump_mc_entry_list();
+    for (auto& entry: mc_entry_list) {
+        ASSERT_TRUE(entry.port_list.empty());
+    }
+}
+
+TEST(nas_mc, validate_mld_non_oif_entry_1)
+{
+    mc_entry_list.clear();
+    ASSERT_TRUE(run_command("hshell -c \"ipmc ip6table show\"", mld_entry_check, mld_entry_proc));
+    ASSERT_TRUE(mc_entry_list.size() > 0);
+    ASSERT_TRUE(run_command("hshell -c \"mc show\"", mc_group_check, mc_group_proc));
+    dump_mc_entry_list();
+    for (auto& entry: mc_entry_list) {
+        ASSERT_TRUE(entry.port_list.empty());
+    }
+}
+
+TEST(nas_mc, send_ipv4_non_oif_route_del_event)
+{
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV4, TEST_NULL_LIST,true, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV4, TEST_SRC_IPV4,true, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV4, TEST_SRC_IPV4_LIST,true, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV4_LIST, TEST_SRC_IPV4_LIST,true, false, false));
+}
+
+TEST(nas_mc, send_ipv6_non_oif_route_del_event)
+{
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV6,TEST_NULL_LIST, false, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV6,TEST_SRC_IPV6, false, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV6,TEST_SRC_IPV6_LIST, false, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV6_LIST,TEST_SRC_IPV6_LIST, false, false, false));
+}
+
+TEST(nas_mc, check_clear_intf_entries)
+{
+    // Create non-OIF entry
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV4, TEST_NULL_LIST,true, false, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV6, TEST_NULL_LIST, false, false, true));
+    mc_entry_list.clear();
+    ASSERT_TRUE(run_command("hshell -c \"ipmc table show\"", igmp_entry_check, igmp_entry_proc));
+    ASSERT_TRUE(run_command("hshell -c \"ipmc ip6table show\"", mld_entry_check, mld_entry_proc));
+    ASSERT_TRUE(run_command("hshell -c \"mc show\"", mc_group_check, mc_group_proc));
+    cout << "Non-OIF entries for IPv4 and IPv6 group addresses:" << endl;
+    dump_mc_entry_list();
+    ASSERT_TRUE(mc_entry_list.size() == 2);
+    ASSERT_TRUE(mc_entry_list[0].group_id == mc_entry_list[1].group_id);
+    for (auto& entry: mc_entry_list) {
+        ASSERT_TRUE(entry.port_list.empty());
+    }
+    auto dft_group_id = mc_entry_list[0].group_id;
+
+    // Add mrouter
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, IGMP_MROUTER_IF_NAME, TEST_NULL_LIST, TEST_NULL_LIST, true, true, true));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, MLD_MROUTER_IF_NAME, TEST_NULL_LIST, TEST_NULL_LIST, false, true, true));
+    mc_entry_list.clear();
+    ASSERT_TRUE(run_command("hshell -c \"ipmc table show\"", igmp_entry_check, igmp_entry_proc));
+    ASSERT_TRUE(run_command("hshell -c \"ipmc ip6table show\"", mld_entry_check, mld_entry_proc));
+    ASSERT_TRUE(run_command("hshell -c \"mc show\"", mc_group_check, mc_group_proc));
+    cout << "After mrouter interfaces being added:" << endl;
+    dump_mc_entry_list();
+    ASSERT_TRUE(mc_entry_list.size() == 2);
+    ASSERT_TRUE(mc_entry_list[0].group_id != dft_group_id);
+    ASSERT_TRUE(mc_entry_list[1].group_id != dft_group_id);
+    for (auto& entry: mc_entry_list) {
+        ASSERT_TRUE(!entry.port_list.empty());
+    }
+
+    // Clear intf entries
+    cout << "Clear entries for interface " << IGMP_MROUTER_IF_NAME << " and " << MLD_MROUTER_IF_NAME << endl;
+    cleanup_intf_l2mc_config(TEST_VID, IGMP_MROUTER_IF_NAME);
+    cleanup_intf_l2mc_config(TEST_VID, MLD_MROUTER_IF_NAME);
+    mc_entry_list.clear();
+    ASSERT_TRUE(run_command("hshell -c \"ipmc table show\"", igmp_entry_check, igmp_entry_proc));
+    ASSERT_TRUE(run_command("hshell -c \"ipmc ip6table show\"", mld_entry_check, mld_entry_proc));
+    ASSERT_TRUE(run_command("hshell -c \"mc show\"", mc_group_check, mc_group_proc));
+    cout << "After mrouter interface related entries being deleted:" << endl;
+    dump_mc_entry_list();
+    ASSERT_TRUE(mc_entry_list.size() == 2);
+    ASSERT_TRUE(mc_entry_list[0].group_id == dft_group_id);
+    ASSERT_TRUE(mc_entry_list[1].group_id == dft_group_id);
+    for (auto& entry: mc_entry_list) {
+        ASSERT_TRUE(entry.port_list.empty());
+    }
+
+    // Delete entries
+    cout << "Delete all entries" << endl;
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV4, TEST_NULL_LIST,true, false, false));
+    ASSERT_TRUE(send_mc_update_event(TEST_VID, "", TEST_GRP_IPV6, TEST_NULL_LIST, false, false, false));
+    mc_entry_list.clear();
+    ASSERT_TRUE(run_command("hshell -c \"ipmc ip6table show\"", mld_entry_check, mld_entry_proc));
+    ASSERT_TRUE(run_command("hshell -c \"mc show\"", mc_group_check, mc_group_proc));
+    dump_mc_entry_list();
+    ASSERT_TRUE(mc_entry_list.empty());
 }
 
 TEST(nas_mc, deinit_event_service)
