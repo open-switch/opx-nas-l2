@@ -521,6 +521,22 @@ static bool nas_stg_update_vlan_stp_state(nas_stg_entry_t * entry, hal_vlan_id_t
     return true;
 }
 
+static bool nas_stg_update_vlan_member_stp_state(nas_stg_entry_t * entry, hal_vlan_id_t vlan_id, hal_ifindex_t ifindex){
+
+    auto it = entry->stp_states.find(ifindex);
+    if(it == entry->stp_states.end()) return false;
+
+    if(!nas_stg_update_os_stp_state(it->first,it->second, vlan_id, false)){
+        return false;
+    }
+
+    if(!nas_update_stp_state(entry,it->first,it->second)){
+        return false;
+    }
+
+    return true;
+}
+
 // Helper function to remove deleted vlans from vlan list and vlan to stg map
 static void nas_stg_clean_vlan_list(nas_stg_vlan_list_t & cur_vlan_list,
         nas_stg_vlan_list_t & del_vlan_list) {
@@ -1305,5 +1321,18 @@ t_std_error nas_stg_set_interface_default_state(npu_id_t npu,port_t port){
         return STD_ERR(STG,FAIL,0);
     }
     EV_LOGGING(NAS_L2,DEBUG,"NAS-STG","Set the port state for %d to %d in default state",port,default_stg_state);
+    return STD_ERR_OK;
+}
+
+t_std_error nas_stg_set_vlan_member_port_state(hal_vlan_id_t vlan_id, hal_ifindex_t ifindex){
+    std_mutex_simple_lock_guard lock(&nas_stg_mutex);
+    auto it = vlan_to_stg_map.find(vlan_id);
+    if( it != vlan_to_stg_map.end()){
+
+        auto sit = nas_stg_table->find(it->second);
+        if(sit == nas_stg_table->end()) return STD_ERR(STG,FAIL,0);
+        nas_stg_entry_t * entry = &(sit->second);
+        nas_stg_update_vlan_member_stp_state(entry,vlan_id,ifindex);
+    }
     return STD_ERR_OK;
 }

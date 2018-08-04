@@ -34,25 +34,12 @@
 
 static auto nas_mac_request_queue = new nas_mac_cps_event_queue_t;
 static auto mac_delete_queue = new nas_mac_cps_event_queue_t;
-bool clear_all = false;
-static auto nas_mac_event_queue = new nas_mac_npu_event_queue_t;
-static size_t max_obj_pub_thresold = 1000;
-static int event_fd[2];
-static unsigned int client_count = 0;
-static int max_sock_fd;
-static int max_pending_con = 0;
-static const char * mac_socket_path = "/tmp/nas_mac_socket";
-static fd_set  mac_fd_set;
-static fd_set  mac_master_fd_set;
-static const unsigned int nas_mac_max_connect_retries = 100;
+static auto nas_mac_event_queue =  *new nas_mac_npu_event_queue_t;
 static size_t vlan_flush_count =0;
 static size_t port_flush_count =0;
 static size_t port_vlan_flush_count  = 0;
-static std::condition_variable _cv;
-static std::mutex _mtx;
-static bool _server_ready = false;
-
-
+static bool clear_all=false;
+static std::mutex mac_npu_event_mtx;
 static auto port_flush_queue = new std::unordered_map <hal_ifindex_t, nas_mac_cps_event_t>;
 static auto vlan_flush_queue = new std::unordered_map <hal_vlan_id_t, nas_mac_cps_event_t>;
 
@@ -79,10 +66,115 @@ struct port_vlan_flush_hash{
 static auto port_vlan_flush_queue = new std::unordered_map<port_vlan_flush_t,
                                     nas_mac_cps_event_t, port_vlan_flush_hash>;
 
-nas_mac_npu_event_queue_t & nas_mac_get_npu_event_queue(){
-    return *nas_mac_event_queue;
+static cps_api_event_service_handle_t handle;
+static unsigned int max_pub_thresold = 40;
+
+t_std_error nas_mac_event_handle_init(){
+
+    if (cps_api_event_service_init() != cps_api_ret_code_OK) {
+        return false;
+    }
+
+    if (cps_api_event_client_connect(&handle) != cps_api_ret_code_OK) {
+        return false;
+    }
+
+    return STD_ERR_OK;
 }
 
+
+t_std_error nas_mac_event_publish(cps_api_object_t obj){
+    cps_api_return_code_t rc;
+    if((rc = cps_api_event_publish(handle,obj))!= cps_api_ret_code_OK){
+        EV_LOGGING(L2MAC,ERR,"MAC-EV-PUB","Failed to publish MAC event");
+        cps_api_object_delete(obj);
+        return (t_std_error)rc;
+    }
+    cps_api_object_delete(obj);
+    return STD_ERR_OK;
+}
+
+static auto nas_to_pub_ev_type = new std::unordered_map<unsigned int,unsigned int>{
+    {NAS_MAC_ADD,BASE_MAC_MAC_EVENT_TYPE_LEARNT},
+    {NAS_MAC_DEL,BASE_MAC_MAC_EVENT_TYPE_AGED},
+    {NAS_MAC_FLUSH,BASE_MAC_MAC_EVENT_TYPE_FLUSHED},
+    {NAS_MAC_MOVE,BASE_MAC_MAC_EVENT_TYPE_MOVED}
+};
+
+void nas_mac_add_event_entry_to_obj(cps_api_object_t obj,nas_mac_entry_t & entry,nas_l2_mac_op_t add, unsigned int index){
+
+    BASE_MAC_MAC_EVENT_TYPE_t ev_type;
+    auto it = nas_to_pub_ev_type->find(add);
+
+    if(it != nas_to_pub_ev_type->end()){
+        ev_type = (BASE_MAC_MAC_EVENT_TYPE_t)it->second;
+    }else{
+        NAS_MAC_LOG(ERR,"Invalid nas l2 mac op %d for publishing events",add);
+        return;
+    }
+
+    if(ev_type == BASE_MAC_MAC_EVENT_TYPE_AGED){
+        nas_mac_update_entry_in_os(&entry,cps_api_oper_DELETE);
+    }else if (ev_type == BASE_MAC_MAC_EVENT_TYPE_MOVED){
+        nas_mac_update_entry_in_os(&entry,cps_api_oper_SET);
+    }
+
+    cps_api_attr_id_t ids[3] = {BASE_MAC_LIST_ENTRIES, index,BASE_MAC_LIST_ENTRIES_IFINDEX };
+    const int ids_len = sizeof(ids)/sizeof(ids[0]);
+    cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&entry.ifindex,sizeof(entry.ifindex));
+    ids[2] = BASE_MAC_LIST_ENTRIES_ACTIONS;
+    cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&entry.pkt_action,sizeof(entry.pkt_action));
+    ids[2] = BASE_MAC_LIST_ENTRIES_VLAN;
+    cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U16,&entry.entry_key.vlan_id,
+                     sizeof(entry.entry_key.vlan_id));
+    ids[2] = BASE_MAC_LIST_ENTRIES_MAC_ADDRESS;
+    cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_BIN,(void*)&entry.entry_key.mac_addr,
+         sizeof(entry.entry_key.mac_addr));
+    ids[2] = BASE_MAC_LIST_ENTRIES_STATIC;
+    cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_BIN,&entry.is_static,sizeof(entry.is_static));
+
+    ids[2] = BASE_MAC_LIST_ENTRIES_EVENT_TYPE;
+    cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&ev_type,sizeof(ev_type));
+
+
+    interface_ctrl_t intf_ctrl;
+    memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
+
+    intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
+    intf_ctrl.if_index = entry.ifindex;
+
+    if(dn_hal_get_interface_info(&intf_ctrl) == STD_ERR_OK) {
+     ids[2] = BASE_MAC_LIST_ENTRIES_IFNAME;
+     cps_api_object_e_add(obj,ids ,ids_len,cps_api_object_ATTR_T_BIN, (const void *)intf_ctrl.if_name,
+                                strlen(intf_ctrl.if_name)+1);
+    }
+
+}
+
+
+static bool nas_mac_process_pub_queue(){
+
+    cps_api_key_t key;
+    cps_api_key_from_attr_with_qual(&key, BASE_MAC_LIST_OBJ,
+                                       cps_api_qualifier_OBSERVED);
+    unsigned int entry_count = 0;
+    while(nas_mac_event_queue.size() > 0){
+        cps_api_object_t obj = cps_api_object_create();
+        if(obj == nullptr){
+            NAS_MAC_LOG(ERR,"Failed to allocate memory for mac event publish");
+            return false;
+        }
+        cps_api_object_set_key(obj,&key);
+        while(entry_count < max_pub_thresold && nas_mac_event_queue.size() > 0){
+            nas_mac_npu_event_t & event = nas_mac_event_queue.front();
+            nas_mac_add_event_entry_to_obj(obj,event.entry,event.op_type,entry_count++);
+            nas_mac_event_queue.pop_front();
+        }
+        entry_count=0;
+        nas_mac_event_publish(obj);
+    }
+    return true;
+}
 void nas_mac_flush_count_dump(void){
     EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Port flush count %lu",port_flush_count);
     EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","vlan flush count %lu",vlan_flush_count);
@@ -110,7 +202,7 @@ static t_std_error nas_mac_read_cps_notification(int fd, const size_t count,nas_
 }
 
 
-static t_std_error nas_mac_read_npu_notification(int fd, const size_t count,nas_mac_npu_event_queue_t & event_list){
+static t_std_error nas_mac_read_npu_notification(int fd, const size_t count){
 
     t_std_error rc;
     int len = sizeof(nas_mac_npu_event_t) * count;
@@ -122,9 +214,11 @@ static t_std_error nas_mac_read_npu_notification(int fd, const size_t count,nas_
         return rc;
     }
 
+    std::lock_guard<std::mutex> lk(mac_npu_event_mtx);
     for(unsigned int ix = 0 ; ix < count ; ++ix){
-        event_list.push_back(mac_npu_event_vec[ix]);
+        nas_mac_event_queue.push_back(mac_npu_event_vec[ix]);
     }
+    nas_mac_process_pub_queue();
 
     return STD_ERR_OK;
 }
@@ -202,7 +296,8 @@ static void nas_mac_clear_hw_mac(nas_mac_cps_event_t & req_entry){
 
 
     if(req_entry.del_type == NDI_MAC_DEL_ALL_ENTRIES){
-        nas_mac_event_queue->clear();
+        std::lock_guard<std::mutex> lk(mac_npu_event_mtx);
+        nas_mac_event_queue.clear();
         return;
     }
 }
@@ -287,135 +382,50 @@ static void nas_mac_drain_cps_queue(int fd,size_t count){
 }
 
 
-static void nas_mac_process_events(int fd){
+static void nas_mac_process_cps_events(int fd){
     nas_l2_event_header_t ev_hdr;
     t_std_error rc;
     if(std_read(fd,&ev_hdr,sizeof(ev_hdr),true,&rc)!= sizeof(ev_hdr)){
         NAS_MAC_LOG(ERR,"Failed to read mac event header from fd %d",fd);
     }
 
-    if(ev_hdr.ev_type == NAS_MAC_CPS_EVENT){
-        nas_mac_drain_cps_queue(fd,ev_hdr.len);
-    }
-
-    if(ev_hdr.ev_type == NAS_MAC_NPU_EVENT){
-        nas_mac_read_npu_notification(fd,ev_hdr.len,*nas_mac_event_queue);
-    }
-
+    nas_mac_drain_cps_queue(fd,ev_hdr.len);
 
 }
 
-static void nas_mac_process_pending_events(int server_fd){
-
-    if(FD_ISSET(server_fd,&mac_fd_set)){
-        if((event_fd[client_count] = accept(server_fd,NULL,NULL)) >= 0){
-            if(event_fd[client_count] > max_sock_fd){
-                max_sock_fd = event_fd[client_count];
-            }
-
-            FD_SET(event_fd[client_count],&mac_master_fd_set);
-            client_count++;
-            return;
-        }
-    }
-
-    for(unsigned int i = 0 ; i < client_count ; ++i){
-        if(FD_ISSET(event_fd[i],&mac_fd_set)){
-            nas_mac_process_events(event_fd[i]);
-        }
-    }
-}
-
-
-t_std_error nas_mac_connect_to_master_thread(int * client_fd){
-
-    std::unique_lock<std::mutex> _lk(_mtx);
-    while(!_server_ready){
-        _cv.wait(_lk);
-    }
-
-    std_socket_address_t client_sock;
-    client_sock.type = e_std_sock_UNIX;
-    client_sock.addr_type = e_std_socket_a_t_STRING;
-    strncpy(client_sock.address.str,mac_socket_path,sizeof(client_sock.address.str)-1);
-
-    unsigned int attempt_ix = 0;
-    while(attempt_ix < nas_mac_max_connect_retries){
-        if(std_sock_connect(&client_sock,client_fd) == STD_ERR_OK){
-            return STD_ERR_OK;
-        }
-        attempt_ix++;
-        usleep(300);
-    }
-
-    EV_LOGGING(L2MAC,ERR,"NAS-MAC-REG","Failed to connect to NAS Master thread");
-    return STD_ERR(MAC,FAIL,0);
-
-}
-
-
-void nas_l2_mac_req_handler(void){
-
-    std_server_socket_desc_t server_socket;
-    server_socket.listeners = max_pending_con;
-    server_socket.address.addr_type = e_std_socket_a_t_STRING;
-    server_socket.address.type = e_std_sock_UNIX;
-    strncpy(server_socket.address.address.str,mac_socket_path,sizeof(server_socket.address.address.str)-1);
-
-    {
-
-    std::lock_guard<std::mutex> _lk(_mtx);
-
-    if(std_server_socket_create(&server_socket) != STD_ERR_OK){
-        NAS_MAC_LOG(ERR,"Failed to create socket for MAC server thread");
-        return;
-    }
-
-    _server_ready = true;
-    _cv.notify_all();
-
-    }
-    max_sock_fd = server_socket.socket;
-
-
-    FD_ZERO (&mac_fd_set);
-    FD_ZERO (&mac_master_fd_set);
-    FD_SET (server_socket.socket, &mac_master_fd_set);
-
-    /*
-     * Currently use 5m sec as timeout from select, when new mac addresses are being learnt
-     * don't send notification, let select timeout and if there are any mac addresses needs
-     * to be published, publish it in batches.
-     */
-
-
-    int ret_code;
+static void nas_mac_process_npu_events(int fd){
+    nas_l2_event_header_t ev_hdr;
     t_std_error rc;
-    while(1){
-        mac_fd_set = mac_master_fd_set;
-        struct timeval mac_timeout = {0,5000};
+    if(std_read(fd,&ev_hdr,sizeof(ev_hdr),true,&rc)!= sizeof(ev_hdr)){
+        NAS_MAC_LOG(ERR,"Failed to read mac event header from fd %d",fd);
+    }
 
-        if((ret_code = std_select_ignore_intr(max_sock_fd+1,&mac_fd_set,NULL,NULL,&mac_timeout,&rc)) >= 0){
+    nas_mac_read_npu_notification(fd,ev_hdr.len);
 
-            if(ret_code == 0){
-                if(nas_mac_event_queue->size() > 0){
-                   nas_mac_process_pub_queue();
-                }
-            }
-            else{
-                if(nas_mac_event_queue->size() >= max_obj_pub_thresold){
-                    nas_mac_process_pub_queue();
-                }
-                nas_mac_process_pending_events(server_socket.socket);
-            }
-        }
+}
+
+
+void nas_l2_mac_npu_req_handler(void){
+
+    int npu_read_fd = nas_mac_get_read_npu_thread_fd();
+    while(true){
+        nas_mac_process_npu_events(npu_read_fd);
+    }
+
+}
+
+void nas_l2_mac_cps_req_handler(void){
+
+    int cps_read_fd = nas_mac_get_read_cps_thread_fd();
+    while(true){
+        nas_mac_process_cps_events(cps_read_fd);
     }
 }
 
 
 t_std_error nas_mac_send_cps_event_notification(void * data , int len){
 
-    int fd = nas_mac_get_cps_thread_fd();
+    static int fd = nas_mac_get_write_cps_thread_fd();
     t_std_error rc;
     if(std_write(fd,data,len,true,&rc) != len){
         EV_LOGGING(L2MAC,ERR,"L2-FLUSH-NOT","Failed to send event header server");
@@ -427,7 +437,7 @@ t_std_error nas_mac_send_cps_event_notification(void * data , int len){
 
 
 t_std_error nas_mac_send_npu_event_notification(void * data, int len){
-    int fd = nas_mac_get_npu_thread_fd();
+    static int fd = nas_mac_get_write_npu_thread_fd();
     t_std_error rc;
     if(std_write(fd,data,len,true,&rc) != len){
         EV_LOGGING(L2MAC,ERR,"L2-FLUSH-NOT","Failed to send event header server");

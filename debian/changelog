@@ -1,3 +1,13 @@
+opx-nas-l2 (1.22.0+opx1) unstable; urgency=medium
+
+  * Bugfix: RSTP BLK port’s status is set as “forwarding” in kernel for newly created vlans; 
+            control traffic gets soft flooded.
+  * Update: Support IPv6 extended prefix installation.
+  * Update: (L2MC support) SG entry due to exclude join points to an invalid L2MC 
+            after removing mrouter port from the VLAN.
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Fri, 10 Aug 2018 14:38:23 -0800
+
 opx-nas-l2 (1.22.0) unstable; urgency=medium
 
   * Bugfix: Multicast Grp ID for a route is updated correctly when routes move from NULL OIF to OIFs. 

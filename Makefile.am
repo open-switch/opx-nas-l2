@@ -17,7 +17,7 @@ libopx_nas_l2_la_SOURCES=src/stg/nas_stg_cps.cpp \
          src/sflow/nas_sflow_cps.cpp src/sflow/nas_sflow_api.cpp \
          src/mirror/nas_mirror_api.cpp src/mirror/nas_mirror_cps.cpp \
          src/mac/nas_mac_api.cpp src/mac/nas_mac_cps.cpp \
-         src/mac/nas_mac_request_handler.cpp src/mac/nas_mac_events.cpp \
+         src/mac/nas_mac_request_handler.cpp \
          src/switch/nas_switch_cps.cpp src/switch/nas_switch_mac.cpp \
          src/switch/nas_switch_log.cpp src/switch/nas_hash_cps.cpp \
          src/mcast_snooping/nas_mc_cps.cpp  src/mcast_snooping/nas_mc_main.cpp \

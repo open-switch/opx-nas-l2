@@ -36,18 +36,23 @@
 #include "hal_if_mapping.h"
 #include "cps_api_interface_types.h"
 #include "std_thread_tools.h"
+#include "ds_common_types.h"
+#include "std_mac_utils.h"
+#include "dell-base-routing.h"
+#include "os-routing-events.h"
+#include "bridge-model.h"
 
 #include "cps_api_object.h"
-#include "cps_api_object_category.h"
 #include "cps_api_object_key.h"
+#include "std_socket_tools.h"
 
 #include <unordered_map>
 #include <unordered_set>
 
 static bool mac_auto_flush=true;
 
-static int cps_thread_fd = 0;
-static int npu_thread_fd = 0;
+static int cps_thread_fd[2];
+static int npu_thread_fd[2];
 
 // map to maintain vlan id to bridge ifindex mapping
 static auto mac_vlan_id_to_ifindex_map = new std::unordered_map<hal_vlan_id_t,hal_ifindex_t>;
@@ -112,12 +117,20 @@ bool nas_mac_publish_flush_event(ndi_mac_delete_type_t del_type, nas_mac_entry_t
 }
 
 
-int nas_mac_get_cps_thread_fd(){
-    return cps_thread_fd;
+int nas_mac_get_read_cps_thread_fd(){
+    return cps_thread_fd[0];
 }
 
-int nas_mac_get_npu_thread_fd(){
-    return npu_thread_fd;
+int nas_mac_get_write_cps_thread_fd(){
+    return cps_thread_fd[1];
+}
+
+int nas_mac_get_read_npu_thread_fd(){
+    return npu_thread_fd[0];
+}
+
+int nas_mac_get_write_npu_thread_fd(){
+    return npu_thread_fd[1];
 }
 
 static void nas_mac_entry_to_cps_obj(cps_api_object_list_t list, nas_mac_entry_t & entry){
@@ -723,27 +736,38 @@ t_std_error nas_mac_reg_vlan_event (void) {
 
 t_std_error nas_mac_init(cps_api_operation_handle_t handle) {
 
-    std_thread_create_param_t nas_l2_mac_req_handler_thr;
-    std_thread_init_struct(&nas_l2_mac_req_handler_thr);
-    nas_l2_mac_req_handler_thr.name = "nas-l2-mac-req-handler";
-    nas_l2_mac_req_handler_thr.thread_function = (std_thread_function_t)nas_l2_mac_req_handler;
-
-    if (std_thread_create(&nas_l2_mac_req_handler_thr)!=STD_ERR_OK) {
-        NAS_MAC_LOG(ERR, "Error creating nas mac request thread");
-        return STD_ERR(MAC,FAIL,0);
-    }
-
-    if(nas_mac_connect_to_master_thread(&npu_thread_fd) != STD_ERR_OK){
-        NAS_MAC_LOG(ERR,"Failed to connect to master thread");
-        return STD_ERR(MAC,FAIL,0);
-    }
-
-    if(nas_mac_connect_to_master_thread(&cps_thread_fd) != STD_ERR_OK){
-        NAS_MAC_LOG(ERR,"Failed to conenct to master thread");
-        return STD_ERR(MAC,FAIL,0);
-    }
-
     t_std_error rc;
+    e_std_soket_type_t domain = e_std_sock_UNIX;
+    if (( rc = std_sock_create_pair(domain, true, npu_thread_fd)) != STD_ERR_OK) {
+        EV_LOGGING(NAS_OS,ERR,"NAS-MAC-INIT","Failed to create socketpair for mac npu thread");
+        return STD_ERR(NPU,FAIL,0);
+    }
+
+    if (( rc = std_sock_create_pair(domain, true, cps_thread_fd)) != STD_ERR_OK) {
+        EV_LOGGING(NAS_OS,ERR,"NAS-MAC-INIT","Failed to create socketpair for mac npu thread");
+        return STD_ERR(NPU,FAIL,0);
+    }
+    std_thread_create_param_t nas_l2_npu_thread;
+    std_thread_init_struct(&nas_l2_npu_thread);
+    nas_l2_npu_thread.name = "nas-l2-npu-thrd";
+    nas_l2_npu_thread.thread_function = (std_thread_function_t)nas_l2_mac_npu_req_handler;
+
+    if (std_thread_create(&nas_l2_npu_thread)!=STD_ERR_OK) {
+        NAS_MAC_LOG(ERR, "Error creating nas mac npu thread");
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+    std_thread_create_param_t nas_l2_cps_thread;
+    std_thread_init_struct(&nas_l2_cps_thread);
+    nas_l2_cps_thread.name = "nas-l2-cps-thrd";
+    nas_l2_cps_thread.thread_function = (std_thread_function_t)nas_l2_mac_cps_req_handler;
+
+    if (std_thread_create(&nas_l2_cps_thread)!=STD_ERR_OK) {
+        NAS_MAC_LOG(ERR, "Error creating nas mac cps thread");
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+
     cps_api_event_reg_t reg;
     memset(&reg,0,sizeof(reg));
 

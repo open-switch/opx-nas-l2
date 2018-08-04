@@ -667,7 +667,7 @@ t_std_error nas_mc_snooping::delete_vlan_entries(hal_vlan_id_t vlan_id, mc_event
 t_std_error nas_mc_snooping::delete_intf_entries(npu_id_t npu_id, bool all_vlan, hal_vlan_id_t vlan_id,
                                                  hal_ifindex_t ifindex)
 {
-    t_std_error rc, ret_val = STD_ERR_OK;
+    t_std_error rc = STD_ERR_OK;
 
     if (all_vlan) {
         NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Delete group members of ifindex %d for all VLANs from NPU",
@@ -702,16 +702,14 @@ t_std_error nas_mc_snooping::delete_intf_entries(npu_id_t npu_id, bool all_vlan,
             auto rtr_mbr_it = route_info.second.router_member_list.find(ifindex);
             if (mbr_it != route_info.second.host_member_list.end()) {
                 rc = ndi_l2mc_group_delete_member(npu_id, mbr_it->second);
-                if (rc == STD_ERR_OK) {
-                    if (route_info.second.host_member_list.size() == 1) {
-                        del_entry = true;
-                    }
-                } else {
+                if (rc != STD_ERR_OK) {
                     NAS_MC_LOG_ERR("NAS-MC-PROC", "Failed to delete group host member");
-                    ret_val = rc;
+                    break;
                 }
-            } else if ((mbr_it == route_info.second.host_member_list.end()) &&
-                       (rtr_mbr_it != route_info.second.router_member_list.end())) {
+                if (route_info.second.host_member_list.size() == 1) {
+                    del_entry = true;
+                }
+            } else if (rtr_mbr_it != route_info.second.router_member_list.end()) {
                 /* if port is not found in membership list check if it is mrouter
                    port, if yes delete it */
                 NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Ifindex %d is mrouter in %s , delete it:",
@@ -719,7 +717,12 @@ t_std_error nas_mc_snooping::delete_intf_entries(npu_id_t npu_id, bool all_vlan,
                 rc = ndi_l2mc_group_delete_member(npu_id, rtr_mbr_it->second);
                 if (rc != STD_ERR_OK) {
                    NAS_MC_LOG_ERR("NAS-MC-PROC", "Failed to delete group mrouter member");
-                   ret_val = rc;
+                   break;
+                }
+                if (route_info.second.host_member_list.empty() &&
+                    route_info.second.router_member_list.size() == 1) {
+                    /* last mrouter to be deleted from null-oif group */
+                    del_entry = true;
                 }
             } else if (!all_vlan) {
                 NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Ifindex %d not found in entry %s member list:",
@@ -730,7 +733,7 @@ t_std_error nas_mc_snooping::delete_intf_entries(npu_id_t npu_id, bool all_vlan,
                 }
             }
             if (del_entry) {
-                NAS_MC_LOG_DEBUG("NAS-MC-PROC", "No host member in group, entry will be deleted");
+                NAS_MC_LOG_DEBUG("NAS-MC-PROC", "No host member in group or non-OIF entry has no mrouter, entry will be deleted");
                 ndi_mcast_entry_t mc_entry{vlan_id,
                                            route_info.first.is_xg ? NAS_NDI_MCAST_ENTRY_TYPE_XG : NAS_NDI_MCAST_ENTRY_TYPE_SG,
                                            route_info.first.dst_ip,
@@ -741,24 +744,50 @@ t_std_error nas_mc_snooping::delete_intf_entries(npu_id_t npu_id, bool all_vlan,
                                    "Failed to delete multicast entry of group %s and VLAN %d",
                                    nas_mc_entry_key_tag(route_info.first),
                                    vlan_id);
-                    ret_val = rc;
+                    break;
                 }
                 for (auto& rt_mbr: route_info.second.router_member_list) {
                     if (rt_mbr.first == ifindex) {
+                        /* ignore already deleted member */
                         continue;
                     }
                     rc = ndi_l2mc_group_delete_member(npu_id, rt_mbr.second);
                     if (rc != STD_ERR_OK) {
                         NAS_MC_LOG_ERR("NAS-MC-PROC", "Failed to delete group mrouter member");
-                        ret_val = rc;
+                        break;
                     }
+                }
+                if (rc != STD_ERR_OK) {
+                    break;
                 }
                 rc = ndi_l2mc_group_delete(npu_id, route_info.second.ndi_group_id);
                 if (rc != STD_ERR_OK) {
                     NAS_MC_LOG_ERR("NAS-MC-PROC", "Failed to delete multicast group");
-                    ret_val = rc;
+                    break;
+                }
+                if (route_info.second.host_member_list.empty()) {
+                    /* restore default group for null-oif entry */
+                    NAS_MC_LOG_DEBUG("NAS-MC-PROC", "Re-create non-OIF entry with default group");
+                    ndi_obj_id_t dft_group_id;
+                    rc = get_default_group_id(npu_id, dft_group_id);
+                    if (rc != STD_ERR_OK) {
+                        NAS_MC_LOG_ERR("NAS-MC-PROC", "Failed to default group ID for npu %d", npu_id);
+                        break;
+                    }
+                    mc_entry.group_id = dft_group_id;
+                    rc = ndi_mcast_entry_create(npu_id, &mc_entry);
+                    if (rc != STD_ERR_OK) {
+                        NAS_MC_LOG_ERR("NAS-MC-PROC", "Failed to create non-OIF entry for group %s",
+                                       nas_mc_entry_key_tag(route_info.first));
+                        break;
+                    }
+                    route_info.second.ndi_group_id = dft_group_id;
                 }
             }
+        }
+        if (rc != STD_ERR_OK) {
+            NAS_MC_LOG_ERR("NAS-MC-PROC", "Failed to delete interface entries on VLAN %d", vlan_id);
+            break;
         }
         if (all_vlan) {
             ++ vlan_it;
@@ -767,7 +796,7 @@ t_std_error nas_mc_snooping::delete_intf_entries(npu_id_t npu_id, bool all_vlan,
         }
     }
 
-    return ret_val;
+    return rc;
 }
 
 void nas_mc_snooping::flush(hal_vlan_id_t vlan_id, mc_event_type_t ip_type)
@@ -1163,15 +1192,20 @@ void nas_mc_snooping::update(const mc_snooping_msg_t& msg_info)
                                         nas_mc_entry_key_tag(it->first));
                         it->second.router_member_list.erase(mr_it);
                     }
-                    auto hst_it = it->second.host_member_list.find(msg_info.ifindex);
-                    if (hst_it != it->second.host_member_list.end()) {
-                        NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Remove host interface from multicast entry %s",
-                                        nas_mc_entry_key_tag(it->first));
-                        it->second.host_member_list.erase(hst_it);
-                    }
-                    if (it->second.host_member_list.empty()) {
-                        it = snp_info.route_list.erase(it);
+                    if (!it->second.host_member_list.empty()) {
+                        auto hst_it = it->second.host_member_list.find(msg_info.ifindex);
+                        if (hst_it != it->second.host_member_list.end()) {
+                            NAS_MC_LOG_INFO("NAS-MC-PROC-CACHE", "Remove host interface from multicast entry %s",
+                                            nas_mc_entry_key_tag(it->first));
+                            it->second.host_member_list.erase(hst_it);
+                        }
+                        if (it->second.host_member_list.empty()) {
+                            it = snp_info.route_list.erase(it);
+                        } else {
+                            ++it;
+                        }
                     } else {
+                        /* non-OIF entry */
                         ++it;
                     }
                 }

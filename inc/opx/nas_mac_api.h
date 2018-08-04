@@ -120,7 +120,9 @@ t_std_error nas_mac_flush_vlan_entries_of_port(uint32_t vlan, hal_ifindex_t port
 t_std_error nas_mac_handle_if_down(hal_ifindex_t ifindex);
 
 /* consumer thread which dequeues the mac operation requests */
-void nas_l2_mac_req_handler(void);
+void nas_l2_mac_npu_req_handler(void);
+
+void nas_l2_mac_cps_req_handler(void);
 
 /* Delete the mac entry from hw */
 t_std_error nas_mac_delete_entries_from_hw(nas_mac_entry_t *entry,ndi_mac_delete_type_t del_type,
@@ -137,19 +139,9 @@ t_std_error nas_mac_publish_entry(nas_mac_entry_t *entry,bool is_static,bool flu
 
 void nas_mac_create_entry_from_cb(nas_mac_entry_t & entry, bool add);
 
-bool nas_mac_process_pub_queue();
-
 t_std_error nas_mac_send_cps_event_notification(void * data, int len);
 
-t_std_error nas_mac_connect_to_master_thread(int *fd);
-
-int nas_mac_get_cps_thread_fd();
-
-int nas_mac_get_npu_thread_fd();
-
 t_std_error nas_mac_send_npu_event_notification(void * data, int len);
-
-nas_mac_npu_event_queue_t & nas_mac_get_npu_event_queue();
 
 void nas_mac_event_notification_cb(npu_id_t npu_id, ndi_mac_event_type_t ev_type, ndi_mac_entry_t *mac_entry, bool is_lag_index);
 
@@ -160,5 +152,13 @@ t_std_error nas_mac_update_entry_in_os(nas_mac_entry_t *entry,cps_api_operation_
 void nas_mac_flush_count_dump(void);
 
 bool nas_mac_publish_flush_event(ndi_mac_delete_type_t del_type, nas_mac_entry_t * entry);
+
+int nas_mac_get_read_cps_thread_fd();
+
+int nas_mac_get_write_cps_thread_fd();
+
+int nas_mac_get_read_npu_thread_fd();
+
+int nas_mac_get_write_npu_thread_fd();
 
 #endif /* NAS_MAC_API_H */
