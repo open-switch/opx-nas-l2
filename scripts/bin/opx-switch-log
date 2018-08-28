@@ -110,6 +110,6 @@ if __name__ == "__main__":
              "base-switch/set_log/input/level": level})
         os.system(
             "/usr/bin/opx_logging_cli enable " + base_mod_ids[sys.argv[2]])
-    pid = get_pid("base_nas")
+    pid = get_pid("base_nas_daemon")
     os.kill(pid,signal.SIGUSR1)
     print "log set for", sys.argv[2], "level",sys.argv[3]
