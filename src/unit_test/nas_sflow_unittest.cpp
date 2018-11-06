@@ -78,8 +78,7 @@ bool nas_sflow_create_test(){
     cps_api_key_from_attr_with_qual(cps_api_object_key(obj),BASE_SFLOW_ENTRY_OBJ,
                                     cps_api_qualifier_TARGET);
 
-    unsigned int ifindex;
-    std::cin>>ifindex;
+    unsigned int ifindex = 16;
     cps_api_object_attr_add_u32(obj,BASE_SFLOW_ENTRY_IFINDEX,ifindex);
     cps_api_object_attr_add_u32(obj,BASE_SFLOW_ENTRY_DIRECTION,(BASE_CMN_TRAFFIC_PATH_t)BASE_CMN_TRAFFIC_PATH_INGRESS);
     cps_api_object_attr_add_u32(obj,BASE_SFLOW_ENTRY_SAMPLING_RATE,1);

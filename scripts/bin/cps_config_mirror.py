@@ -17,7 +17,7 @@
 
 import cps_utils
 import nas_os_utils
-import nas_ut_framework as nas_ut
+import nas_common_utils as nas_common
 import sys
 
 mirror_type = {"span":"1","rspan":"2"}
@@ -29,7 +29,7 @@ def nas_mirror_op(op, data_dict,commit=True):
         module="base-mirror/entry",
         data=data_dict)
     if commit:
-        nas_ut.get_cb_method(op)(obj)
+        nas_common.get_cb_method(op)(obj)
     else:
         return obj
 
@@ -66,7 +66,7 @@ if __name__ == '__main__':
         elif sys.argv[2] =="rspan" and len(sys.argv) == 6:
             usage()
         print obj.get()
-        nas_ut.get_cb_method("create")(obj)
+        nas_common.get_cb_method("create")(obj)
 
     elif sys.argv[1] == "delete" and len(sys.argv) == 3:
         nas_mirror_op("delete", {"id": sys.argv[2]})
@@ -78,7 +78,7 @@ if __name__ == '__main__':
         obj = nas_mirror_op("set", {"id": sys.argv[2]},False)
         nas_mirror_add_source(obj,sys.argv[3],sys.argv[4])
         print obj.get()
-        nas_ut.get_cb_method("set")(obj)
+        nas_common.get_cb_method("set")(obj)
 
     elif sys.argv[1] == "set_dest" and len(sys.argv) == 4:
         nas_mirror_op("set", {"id": sys.argv[2],

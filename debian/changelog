@@ -1,3 +1,20 @@
+opx-nas-l2 (1.22.0+opx3) unstable; urgency=medium
+
+  * Feature: Static L2 VxLAN Support
+  * Bugfix: port-vlan-subport deletion was not handled
+  * Bugfix: Mac changes to support mac learned from untagged_attached vlan members and untagged
+            virtual network members
+  * Bugfix: Add lock to handle NPU MAC events
+  * Update: Check for tunnel ID 0 for tunnel creation/deletion event
+  * Update: Handle vlan member port add to program stg state
+  * Update: Add IPv6 Extended routes handler code
+  * Update: For non-OIF entry, restore to default group ID after mrouter port is deleted
+  * Update: Prevent publishing VLAN id for 1d remote mac
+  * Update: Return code to trigger VLAN key lookup to accommodate initial case when snooping status is same
+  * Update: Update: Renaming nas_ut_framework to nas_common_utils
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Tue, 06 Nov 2018 14:38:23 -0800
+
 opx-nas-l2 (1.22.0+opx2) unstable; urgency=medium
 
   * Bugfix: Fix binary name of opx-nas process in opx-switch-log utility
@@ -7,20 +24,20 @@ opx-nas-l2 (1.22.0+opx2) unstable; urgency=medium
 
 opx-nas-l2 (1.22.0+opx1) unstable; urgency=medium
 
-  * Bugfix: RSTP BLK port’s status is set as “forwarding” in kernel for newly created vlans; 
+  * Bugfix: RSTP BLK port’s status is set as “forwarding” in kernel for newly created vlans;
             control traffic gets soft flooded.
   * Update: Support IPv6 extended prefix installation.
-  * Update: (L2MC support) SG entry due to exclude join points to an invalid L2MC 
+  * Update: (L2MC support) SG entry due to exclude join points to an invalid L2MC
             after removing mrouter port from the VLAN.
 
  -- Dell EMC <ops-dev@lists.openswitch.net>  Fri, 10 Aug 2018 14:38:23 -0800
 
 opx-nas-l2 (1.22.0) unstable; urgency=medium
 
-  * Bugfix: Multicast Grp ID for a route is updated correctly when routes move from NULL OIF to OIFs. 
+  * Bugfix: Multicast Grp ID for a route is updated correctly when routes move from NULL OIF to OIFs.
   * Update: Added support of non-OIF multicast group
   * Bugfix: Multicast traffic should not be forwarded to all the ports in the VLAN in MLD
-  * Update: L2MC support 
+  * Update: L2MC support
 
  -- Dell EMC <ops-dev@lists.openswitch.net>  Mon, 9 Jul 2018 14:38:23 -0800
 
@@ -38,7 +55,7 @@ opx-nas-l2 (1.17.0+opx3) unstable; urgency=medium
   * Update: Add compiler/linker hardening flags
 
  -- Dell EMC <ops-dev@lists.openswitch.net>  Thu, 17 May 2018 14:38:23 -0800
- 
+
 opx-nas-l2 (1.17.0+opx2) unstable; urgency=medium
 
   * Update: Support for printing of list data type
@@ -70,7 +87,7 @@ opx-nas-l2 (1.17.0) unstable; urgency=medium
   * Bugfix: Removed duplicate function to convert name to ifindex
 
  -- Dell EMC <ops-dev@lists.openswitch.net>  Wed, 13 Dec 2017 14:38:23 -0800
- 
+
 opx-nas-l2 (1.14.0) unstable; urgency=medium
 
   * Update: Pass ifname to update mac entry in kernel
@@ -94,7 +111,7 @@ opx-nas-l2 (1.12.0) unstable; urgency=medium
   * Update: Set the port state to blocking when port is deleted from LAG, or LAG is deleted
   * Update: Update/remove mac in kernel when mac is moved/aged in npu
   * Update: Implemented mac get from ndi
-  * Update: Updated the sflow script to accept ifname and ifindex for 
+  * Update: Updated the sflow script to accept ifname and ifindex for
   * Update: Miscellaneous performance improvements and optimizations
   * Feature: Added infra support from BASE for switch profile, uft mode, max ecmp
             based on "dell-switch-element.yang"
@@ -103,7 +120,7 @@ opx-nas-l2 (1.12.0) unstable; urgency=medium
             disable and also disable sampling using enable command with sampling rate of 0
   * Bugfix: Miscellaneous bug fixes
   * Cleanup: Miscellaneous cleanup
- 
+
  -- Dell EMC <ops-dev@lists.openswitch.net>  Tue, 20 Jun 2017 14:38:23 -0800
 
 opx-nas-l2 (1.0.1) unstable; urgency=medium
