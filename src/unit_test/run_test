@@ -1,5 +1,11 @@
 #!/bin/bash
 
+apt-get update
+
+apt-get install -y python-pytest
+
+/usr/bin/python -m pytest ./mac_test.py
+
 ./nas_mac_unittest
 ./nas_stg_unittest
 ./nas_sflow_unittest

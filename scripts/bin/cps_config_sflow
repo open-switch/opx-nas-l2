@@ -15,7 +15,7 @@
 import sys
 import nas_sflow_utils
 import cps_object
-import nas_ut_framework as nas_ut
+import nas_common_utils as nas_common
 import nas_os_utils
 import  cps
 
@@ -58,7 +58,7 @@ def nas_sflow_op(op, data_dict):
             for i in get:
                nas_sflow_utils.print_obj(i)
     else:
-        nas_ut.get_cb_method(op)(obj)
+        nas_common.get_cb_method(op)(obj)
 
 
 def usage():

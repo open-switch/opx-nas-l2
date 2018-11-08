@@ -31,6 +31,7 @@
 #include "cps_api_operation.h"
 #include "cps_class_map.h"
 #include "std_error_codes.h"
+#include "std_utils.h"
 #include "nas_ndi_mac.h"
 #include "nas_ndi_switch.h"
 #include "hal_if_mapping.h"
@@ -57,10 +58,36 @@ static int npu_thread_fd[2];
 // map to maintain vlan id to bridge ifindex mapping
 static auto mac_vlan_id_to_ifindex_map = new std::unordered_map<hal_vlan_id_t,hal_ifindex_t>;
 
+
 // map to maintain interface ifindex to list of bridge index mapping
 static auto mac_port_to_vlan_id_map = new std::unordered_map<hal_ifindex_t,std::unordered_set<hal_ifindex_t>>;
 
+//map to maintain parent_bridge_port index to vlan_id
+static auto map_parent_br_to_vlan_id =new std::unordered_map<hal_ifindex_t ,hal_vlan_id_t>;
+
+/* 0 means it is not set */
+static hal_vlan_id_t bridge_1d_default_untag_vid = 0;
+
 static std_mutex_lock_create_static_init_fast(nas_mac_mutex);
+
+/* Mutex for  map_parent_br_to_vlan_id , bridge_1d_default_untag_vid */
+
+static std_mutex_lock_create_static_init_fast(untagged_vlan_id_mutex);
+
+
+bool nas_mac_get_1d_br_untag_vid(hal_ifindex_t ifx, hal_vlan_id_t &vlan_id) {
+
+   std_mutex_simple_lock_guard lock(&untagged_vlan_id_mutex);
+   auto it = map_parent_br_to_vlan_id->find(ifx);
+   if (it == map_parent_br_to_vlan_id->end()) {
+       vlan_id = bridge_1d_default_untag_vid;
+   } else {
+       vlan_id = it->second;
+   }
+   NAS_MAC_LOG(DEBUG ,"Untagged VLAN id for 1d bridge idx %d is %d ", ifx, vlan_id);
+   return true;
+
+}
 
 bool nas_mac_publish_flush_event(ndi_mac_delete_type_t del_type, nas_mac_entry_t * entry){
     cps_api_object_t obj  = cps_api_object_create();
@@ -151,7 +178,6 @@ static void nas_mac_entry_to_cps_obj(cps_api_object_list_t list, nas_mac_entry_t
 static cps_api_return_code_t cps_nas_mac_get_function (void * context, cps_api_get_params_t * param, size_t ix) {
 
     nas_mac_entry_t mac_entry;
-    memset(&mac_entry, 0, sizeof(mac_entry));
 
     cps_api_object_t filt = cps_api_object_list_get(param->filters,ix);
     if(filt){
@@ -295,6 +321,26 @@ static t_std_error cps_nas_mac_init(cps_api_operation_handle_t handle) {
 
     memset(&f,0,sizeof(f));
 
+    if (!cps_api_key_from_attr_with_qual(&f.key, BASE_MAC_FORWARDING_TABLE_OBJ, cps_api_qualifier_TARGET)) {
+        NAS_MAC_LOG(ERR, "Could not translate %d to key %s,", (int)(BASE_MAC_TABLE_OBJ),
+                    cps_api_key_print(&f.key, buff, sizeof(buff)-1));
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+    NAS_MAC_LOG(DEBUG, "Registering for BASE_MAC_VNI_TABLE_OBJ %s",
+                cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+
+    f.handle = handle;
+    f._write_function = cps_nas_mac_set_function;
+
+    if (cps_api_register(&f)!=cps_api_ret_code_OK) {
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+
+
+    memset(&f,0,sizeof(f));
+
     if (!cps_api_key_from_attr_with_qual(&f.key, BASE_MAC_QUERY_OBJ, cps_api_qualifier_TARGET)) {
           NAS_MAC_LOG(ERR, "Could not translate %d to key %s,", (int)(BASE_MAC_QUERY_OBJ),
                   cps_api_key_print(&f.key, buff, sizeof(buff)-1));
@@ -405,6 +451,31 @@ static bool nas_mac_update_port_to_vlan_mapping_(cps_api_object_t obj, cps_api_o
     return true;
 }
 
+static bool  nas_mac_untagged_vlan_1d_bridge(cps_api_object_t obj, void *param){
+
+    NAS_MAC_LOG(DEBUG, "NAS mac untagged vlan id update for 1d bridges members");
+
+    cps_api_object_attr_t _vn_untagged_vlan_attr = cps_api_object_attr_get(obj,
+                                     DELL_IF_IF_INTERFACES_VLAN_GLOBALS_VN_UNTAGGED_VLAN);
+
+    if (_vn_untagged_vlan_attr == NULL) {
+        NAS_MAC_LOG(DEBUG, "Missing Vlan ID for untagged 1d bridge member");
+        return true;
+
+    }
+    hal_vlan_id_t vlan_id = cps_api_object_attr_data_uint(_vn_untagged_vlan_attr);
+
+    NAS_MAC_LOG(DEBUG, "Changed the default vn untagged vlan to %d", vlan_id);
+
+    if (!vlan_id) {
+        NAS_MAC_LOG(DEBUG, "Invalid Untagged Vlan id 0x%x, returning", vlan_id);
+        return true;
+    }
+    std_mutex_simple_lock_guard lock(&untagged_vlan_id_mutex);
+    bridge_1d_default_untag_vid = vlan_id;
+    return true;
+}
+
 
 static cps_api_return_code_t nas_mac_vlan_process_port_membership(cps_api_object_t obj, bool add_ports)
 {
@@ -483,27 +554,90 @@ static bool nas_mac_vlan_event_cb(cps_api_object_t obj, void *param)
 
 
     if(nas_mac_vlan_process_port_membership(obj, add_ports) != cps_api_ret_code_OK){
-        return false;
+        return true;
     }
 
     NAS_MAC_LOG(DEBUG, "Port vlan membership event processing done .. ");
     return true;
 }
 
+static bool nas_mac_fdb_event_cb(cps_api_object_t obj, void *param)
+{
+
+    nas_mac_entry_t entry;
+    nas::attr_set_t attrs;
+    cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
+    if(op != cps_api_oper_CREATE and op != cps_api_oper_DELETE){
+        return true;
+    }
+
+    NAS_MAC_LOG(INFO,"FDB event cb operation type %d",op);
+
+    cps_api_object_it_t it;
+    cps_api_attr_id_t id = 0;
+    cps_api_object_it_begin(obj,&it);
+
+    for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
+        id = cps_api_object_attr_id(it.attr);
+
+        switch (id) {
+        case BASE_ROUTE_OBJ_NBR_AF:
+            /*
+             * Only process AF_BRIDGE family message
+             */
+
+            if(cps_api_object_attr_data_uint(it.attr) != AF_BRIDGE){
+                return true;
+            }
+            break;
+
+        case BASE_ROUTE_OBJ_NBR_ADDRESS:
+        {
+            size_t len = cps_api_object_attr_len(it.attr);
+            entry.endpoint_ip.af_index = (len == HAL_INET4_LEN) ? HAL_INET4_FAMILY : HAL_INET6_FAMILY;
+            memcpy(&entry.endpoint_ip.u,cps_api_object_attr_data_bin(it.attr),
+                    sizeof(entry.endpoint_ip.u));
+            attrs.add(BASE_MAC_FORWARDING_TABLE_ENDPOINT_IP);
+            attrs.add(BASE_MAC_FORWARDING_TABLE_ENDPOINT_IP_ADDR_FAMILY);
+        }
+            break;
+
+        case BASE_ROUTE_OBJ_NBR_MAC_ADDR:
+            std_string_to_mac(&entry.entry_key.mac_addr, (char*)cps_api_object_attr_data_bin(it.attr),
+                               cps_api_object_attr_len(it.attr));
+            attrs.add(BASE_MAC_TABLE_MAC_ADDRESS);
+            break;
+
+        case BASE_ROUTE_OBJ_NBR_IFINDEX:
+            entry.ifindex = cps_api_object_attr_data_uint(it.attr);
+            attrs.add(BASE_MAC_TABLE_IFINDEX);
+            break;
+        }
+    }
+    entry.cache = true;
+    if(attrs.contains(BASE_MAC_FORWARDING_TABLE_ENDPOINT_IP)){
+        return nas_mac_process_os_event(entry,attrs,op);
+    }
+
+    return true;
+
+}
+
+
+
 static bool nas_mac_if_vlan_state_event_cb(cps_api_object_t obj, void * param){
     cps_api_object_attr_t vlan_attr = cps_api_object_attr_get(obj, BASE_IF_VLAN_IF_INTERFACES_INTERFACE_ID);
     cps_api_object_attr_t bridge_attr = cps_api_object_attr_get(obj, DELL_BASE_IF_CMN_IF_INTERFACES_INTERFACE_IF_INDEX);
+    cps_api_object_attr_t parent_bridge = cps_api_object_attr_get(obj, DELL_IF_IF_INTERFACES_INTERFACE_PARENT_BRIDGE);
 
     if (vlan_attr == NULL || bridge_attr == NULL) {
         NAS_MAC_LOG(ERR,"No VLAN ID/bridge attr passed to process VLAN updates");
         return false;
     }
-
-
     hal_ifindex_t bridge_ifindex = (hal_ifindex_t)cps_api_object_attr_data_u32(bridge_attr);
     hal_vlan_id_t vlan_id = (hal_vlan_id_t)cps_api_object_attr_data_u16(vlan_attr);
-
     cps_api_operation_types_t op = cps_api_object_type_operation (cps_api_object_key (obj));
+
     std_mutex_simple_lock_guard lock(&nas_mac_mutex);
     if (op == cps_api_oper_CREATE) {
         mac_vlan_id_to_ifindex_map->insert({vlan_id, bridge_ifindex});
@@ -514,9 +648,135 @@ static bool nas_mac_if_vlan_state_event_cb(cps_api_object_t obj, void * param){
         for(auto it = mac_port_to_vlan_id_map->begin(); it != mac_port_to_vlan_id_map->end(); ++it){
             it->second.erase(bridge_ifindex);
         }
+        return true;
+    }
+    std_mutex_simple_lock_guard lock_id(&untagged_vlan_id_mutex);
+    if (parent_bridge != NULL) {
+        /*  parent bridge attached processing during vlan interface create or set operation
+         *  Store parent bridge to vlan id mapping if parent bridge is non-empty string
+         *  if parent bridge is empty string then remove the mapping. */
+       size_t len = cps_api_object_attr_len(parent_bridge);
+       if (len != 0) {
+           const char *parent_name = (const char *)cps_api_object_attr_data_bin(parent_bridge);
+           interface_ctrl_t i;
+           memset(&i,0,sizeof(i));
+           safestrncpy(i.if_name,parent_name,sizeof(i.if_name));
+           i.q_type = HAL_INTF_INFO_FROM_IF_NAME;
+           if (dn_hal_get_interface_info(&i)!=STD_ERR_OK){
+               EV_LOGGING(L2MAC, DEBUG, "NAS-MAC",
+                          "Can't get parent interface control information for parent %s",parent_name);
+               return STD_ERR(MAC,FAIL,0);
+           }
+           EV_LOGGING(L2MAC, DEBUG, "NAS-MAC",
+               "Attach vlan parent's ifindex %d and vlan id %d", i.if_index ,vlan_id);
+           map_parent_br_to_vlan_id->insert({i.if_index ,vlan_id});
+
+       } else {
+           /* Its a detach  based on vlan-id remove the entry */
+           for(auto entry = map_parent_br_to_vlan_id->begin(); entry != map_parent_br_to_vlan_id->end(); ++entry){
+              if (entry->second == vlan_id) {
+                 EV_LOGGING(L2MAC, DEBUG, "NAS-MAC",
+                    "Detach vlan parent ifindex %d and vlan id %d", entry->first , entry->second);
+                 map_parent_br_to_vlan_id->erase(entry);
+                 break;
+              }
+           }
+       }
     }
 
+
     return true;
+}
+
+/*  Remote endpoint create /delete event handler  */
+static bool nas_mac_endpoint_ev_cb(cps_api_object_t obj, void *param)
+{
+
+    cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
+
+    bool add = (op == cps_api_oper_DELETE)? false : true;
+
+    ndi_obj_id_t tunnel_obj_id = 0;
+    hal_ip_addr_t ip_addr;
+    memset(&ip_addr,0,sizeof(ip_addr));
+
+    cps_api_object_attr_t vtep_attr = cps_api_get_key_data(obj,IF_INTERFACES_INTERFACE_NAME);
+    cps_api_object_attr_t tunnel_id_attr = cps_api_object_attr_get(obj,DELL_IF_IF_INTERFACES_INTERFACE_REMOTE_ENDPOINT_TUNNEL_ID);
+    if(!vtep_attr) {
+        return true;
+    }
+    if ((add)  && (!tunnel_id_attr)) {
+        return true;
+    }
+    const char * vtep_name = (const char *)cps_api_object_attr_data_bin(vtep_attr);
+
+    cps_api_object_it_t it;
+    cps_api_attr_id_t id = 0;
+    cps_api_object_it_begin(obj,&it);
+
+    for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
+        id = cps_api_object_attr_id(it.attr);
+
+        switch (id) {
+        case DELL_IF_IF_INTERFACES_INTERFACE_REMOTE_ENDPOINT_TUNNEL_ID:
+            tunnel_obj_id = cps_api_object_attr_data_u64(it.attr);
+            break;
+
+        case DELL_IF_IF_INTERFACES_INTERFACE_REMOTE_ENDPOINT_ADDR_FAMILY :
+            ip_addr.af_index = cps_api_object_attr_data_uint(it.attr);
+            break;
+
+        case DELL_IF_IF_INTERFACES_INTERFACE_REMOTE_ENDPOINT_ADDR:
+            memcpy(&ip_addr.u,cps_api_object_attr_data_bin(it.attr),
+                    cps_api_object_attr_len(it.attr));
+            break;
+        }
+    }
+
+    if (tunnel_obj_id == 0) {
+        /* If tunnel ID is 0 then consider it deletion of tunnel ID case  */
+        add = false;
+    }
+
+    NAS_MAC_LOG(DEBUG, "Remote endpoint %s event on the vtep intf %s ", (add) ? "create" : "delete", vtep_name);
+    return _process_remote_endpint(vtep_name,ip_addr,tunnel_obj_id,add);
+
+}
+
+static bool nas_mac_bridge_ev_cb(cps_api_object_t obj, void *param)
+{
+
+    cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
+    if(op != cps_api_oper_CREATE and op != cps_api_oper_DELETE){
+        return true;
+    }
+
+    cps_api_object_attr_t br_attr = cps_api_get_key_data(obj,BRIDGE_DOMAIN_BRIDGE_NAME);
+    if(!br_attr){
+        return true;
+    }
+
+    const char * bridge_name = (const char *)cps_api_object_attr_data_bin(br_attr);
+    const char * vtep_name = nullptr;
+    cps_api_object_it_t it;
+    cps_api_attr_id_t id = 0;
+    cps_api_object_it_begin(obj,&it);
+
+    for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
+        id = cps_api_object_attr_id(it.attr);
+
+        switch (id) {
+        case BRIDGE_DOMAIN_BRIDGE_MEMBER_INTERFACE:
+            vtep_name = (const char *)cps_api_object_attr_data_bin(it.attr);
+            break;
+        }
+
+    }
+
+    if(!vtep_name or !bridge_name) return true;
+
+    return _process_bridge_event(bridge_name,vtep_name, op == cps_api_oper_CREATE ? true: false);
+
 }
 
 static bool nas_mac_if_event_cb(cps_api_object_t obj, void *param)
@@ -531,14 +791,16 @@ static bool nas_mac_if_event_cb(cps_api_object_t obj, void *param)
     cps_api_object_attr_t ifix_attr = cps_api_get_key_data(obj,IF_INTERFACES_STATE_INTERFACE_IF_INDEX);
 
     if (ifix_attr == NULL) {
-        return false;
+        NAS_MAC_LOG(ERR,"Interface Index is missing in the interface object event");
+        return true;
     }
 
     hal_ifindex_t index = cps_api_object_attr_data_u32(ifix_attr);
     cps_api_object_attr_t oper_attr = cps_api_object_attr_get(obj,IF_INTERFACES_STATE_INTERFACE_OPER_STATUS);
 
     if(oper_attr == NULL){
-        return false;
+        /*  Do not care  and return if oper state not present*/
+        return true;
     }
 
     IF_INTERFACES_STATE_INTERFACE_OPER_STATUS_t oper_status = (IF_INTERFACES_STATE_INTERFACE_OPER_STATUS_t)
@@ -547,7 +809,7 @@ static bool nas_mac_if_event_cb(cps_api_object_t obj, void *param)
     if(oper_status == IF_INTERFACES_STATE_INTERFACE_OPER_STATUS_DOWN){
         if(nas_mac_handle_if_down(index) != STD_ERR_OK){
             NAS_MAC_LOG(ERR,"Flush on interface %d failed when it went oper down",index);
-            return false;
+            return true;
         }
     }
     NAS_MAC_LOG(DEBUG,"Flushed Dynamic Entries on an interface %d",index);
@@ -730,7 +992,76 @@ t_std_error nas_mac_reg_vlan_event (void) {
          return STD_ERR(MAC,FAIL,0);
     }
 
+    cps_api_key_from_attr_with_qual(&key, DELL_BASE_IF_CMN_IF_INTERFACES_OBJ,
+                                    cps_api_qualifier_OBSERVED);
+
+    reg.number_of_objects = 1;
+    reg.objects = &key;
+
+    if (cps_api_event_thread_reg(&reg, nas_mac_untagged_vlan_1d_bridge,NULL)!=cps_api_ret_code_OK) {
+        NAS_MAC_LOG(ERR, "Could not register for vlan events");
+        return STD_ERR(MAC,FAIL,0);
+    }
+
     return STD_ERR_OK;
+}
+
+
+t_std_error nas_mac_reg_fdb_event (void) {
+
+    cps_api_event_reg_t reg;
+    cps_api_key_t key;
+    memset(&reg,0,sizeof(reg));
+
+    reg.number_of_objects = 1;
+    reg.objects = &key;
+    cps_api_key_from_attr_with_qual(&key, OS_RE_BASE_ROUTE_OBJ_NBR_OBJ,
+                                       cps_api_qualifier_OBSERVED);
+    if (cps_api_event_thread_reg(&reg, nas_mac_fdb_event_cb,NULL)!=cps_api_ret_code_OK) {
+        NAS_MAC_LOG(ERR, "Could not register for fdb events");
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+    return STD_ERR_OK;
+}
+
+/*  Event handler for Remote end point Tunnel creation/deletion
+ *  Tunnel ID is requried for configuring MAC learnt on the remtoe endpoint IP address. */
+static t_std_error nas_mac_reg_endpoint_event(void){
+    cps_api_event_reg_t reg;
+    cps_api_key_t key;
+    memset(&reg,0,sizeof(reg));
+
+    reg.number_of_objects = 1;
+    reg.objects = &key;
+    cps_api_key_from_attr_with_qual(&key, DELL_IF_IF_INTERFACES_INTERFACE_REMOTE_ENDPOINT,
+                                       cps_api_qualifier_OBSERVED);
+    if (cps_api_event_thread_reg(&reg, nas_mac_endpoint_ev_cb,NULL)!=cps_api_ret_code_OK) {
+        NAS_MAC_LOG(ERR, "Could not register for fdb events");
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+    return STD_ERR_OK;
+
+}
+/*  Bridge Domain event handler is for 1D bridge creation/deletion. Creates mapping between bridge name to bridge ID
+ *  used to programmed NPU  */
+static t_std_error nas_mac_reg_bridge_event(void){
+    cps_api_event_reg_t reg;
+    cps_api_key_t key;
+    memset(&reg,0,sizeof(reg));
+
+    reg.number_of_objects = 1;
+    reg.objects = &key;
+    cps_api_key_from_attr_with_qual(&key, BRIDGE_DOMAIN_BRIDGE_OBJ,
+                                       cps_api_qualifier_OBSERVED);
+    if (cps_api_event_thread_reg(&reg, nas_mac_bridge_ev_cb,NULL)!=cps_api_ret_code_OK) {
+        NAS_MAC_LOG(ERR, "Could not register for fdb events");
+        return STD_ERR(MAC,FAIL,0);
+    }
+
+    return STD_ERR_OK;
+
 }
 
 
@@ -787,6 +1118,10 @@ t_std_error nas_mac_init(cps_api_operation_handle_t handle) {
         return STD_ERR(MAC,FAIL,0);
     }
 
+    if ((rc = nas_mac_reg_fdb_event()) != STD_ERR_OK) {
+            return STD_ERR(MAC,FAIL,0);
+    }
+
     if ((rc = nas_mac_reg_if_event()) != STD_ERR_OK) {
         return STD_ERR(MAC,FAIL,0);
     }
@@ -796,6 +1131,14 @@ t_std_error nas_mac_init(cps_api_operation_handle_t handle) {
     }
 
     if((rc = nas_mac_event_handle_init() != STD_ERR_OK)){
+        return rc;
+    }
+
+    if((rc = nas_mac_reg_bridge_event() != STD_ERR_OK)){
+        return rc;
+    }
+
+    if((rc = nas_mac_reg_endpoint_event())!= STD_ERR_OK){
         return rc;
     }
 

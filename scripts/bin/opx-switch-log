@@ -15,7 +15,7 @@
 
 import sys
 import cps_object
-import nas_ut_framework as nas_ut
+import nas_common_utils as nas_common
 import os
 import signal
 from subprocess import check_output
@@ -88,7 +88,7 @@ def parse_args(id, level):
 def nas_diag_set(data_dict):
     obj = cps_object.CPSObject(module="base-switch/set_log", data=data_dict)
     print obj.get()
-    nas_ut.get_cb_method("rpc")(obj)
+    nas_common.get_cb_method("rpc")(obj)
 
 def get_pid(name):
     return int(check_output(["pidof","-s",name]))

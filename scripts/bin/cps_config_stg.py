@@ -16,7 +16,7 @@
 import sys
 import nas_stg_utils
 import cps_object
-import nas_ut_framework as nas_ut
+import nas_common_utils as nas_common
 import nas_os_utils
 
 port_state_map = {
@@ -33,7 +33,7 @@ def nas_stg_op(op, data_dict, type):
         module=nas_stg_utils.get_stg_keys()[int(type)],
         data=data_dict)
     obj.add_attr("base-stg/entry/switch-id", "0")
-    nas_ut.get_cb_method(op)(obj)
+    nas_common.get_cb_method(op)(obj)
 
 
 def set_stp_state(stg_id, interface, state):
@@ -43,7 +43,7 @@ def set_stp_state(stg_id, interface, state):
     obj.add_embed_attr(el, nas_os_utils.if_nametoindex(interface))
     el[2] = "state"
     obj.add_embed_attr(el, port_state_map[state])
-    nas_ut.get_cb_method("set")(obj)
+    nas_common.get_cb_method("set")(obj)
 
 
 def usage():

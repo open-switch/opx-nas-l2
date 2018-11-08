@@ -28,20 +28,23 @@
 
 #include <unistd.h>
 #include <vector>
+#include <map>
 #include <mutex>
 #include <condition_variable>
 
 
 static auto nas_mac_request_queue = new nas_mac_cps_event_queue_t;
 static auto mac_delete_queue = new nas_mac_cps_event_queue_t;
-static auto nas_mac_event_queue =  *new nas_mac_npu_event_queue_t;
-static size_t vlan_flush_count =0;
-static size_t port_flush_count =0;
-static size_t port_vlan_flush_count  = 0;
-static bool clear_all=false;
-static std::mutex mac_npu_event_mtx;
+static auto nas_mac_event_queue = *new nas_mac_npu_event_queue_t;
+static long unsigned int _flush_count[NDI_MAC_DEL_INVALID_TYPE+1] = {0};
+static bool clear_all =false;
+
 static auto port_flush_queue = new std::unordered_map <hal_ifindex_t, nas_mac_cps_event_t>;
 static auto vlan_flush_queue = new std::unordered_map <hal_vlan_id_t, nas_mac_cps_event_t>;
+static auto bridge_flush_queue = new std::unordered_map<hal_ifindex_t, nas_mac_cps_event_t>;
+static auto bridge_endpoint_queue = new std::map<vni_rem_ip_t, nas_mac_cps_event_t>;
+
+static std::recursive_mutex mac_npu_queue_mtx;
 
 typedef struct port_vlan_flush{
     hal_ifindex_t ifindex;
@@ -65,6 +68,18 @@ struct port_vlan_flush_hash{
 
 static auto port_vlan_flush_queue = new std::unordered_map<port_vlan_flush_t,
                                     nas_mac_cps_event_t, port_vlan_flush_hash>;
+
+
+void nas_mac_flush_count_dump(void){
+    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Port flush count %llu",_flush_count[NDI_MAC_DEL_BY_PORT]);
+    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","vlan flush count %llu",_flush_count[NDI_MAC_DEL_BY_VLAN]);
+    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Port vlan flush count %llu",_flush_count[NDI_MAC_DEL_BY_PORT_VLAN]);
+    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Bridge flush count %llu",_flush_count[NDI_MAC_DEL_BY_BRIDGE]);
+    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Bridge/endpoint flush count %llu",
+            _flush_count[NDI_MAC_DEL_BY_BRIDGE_ENDPOINT_IP]);
+    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Total flush count %llu",_flush_count[NDI_MAC_DEL_INVALID_TYPE]);
+}
+
 
 static cps_api_event_service_handle_t handle;
 static unsigned int max_pub_thresold = 40;
@@ -94,6 +109,7 @@ t_std_error nas_mac_event_publish(cps_api_object_t obj){
     return STD_ERR_OK;
 }
 
+
 static auto nas_to_pub_ev_type = new std::unordered_map<unsigned int,unsigned int>{
     {NAS_MAC_ADD,BASE_MAC_MAC_EVENT_TYPE_LEARNT},
     {NAS_MAC_DEL,BASE_MAC_MAC_EVENT_TYPE_AGED},
@@ -101,7 +117,9 @@ static auto nas_to_pub_ev_type = new std::unordered_map<unsigned int,unsigned in
     {NAS_MAC_MOVE,BASE_MAC_MAC_EVENT_TYPE_MOVED}
 };
 
-void nas_mac_add_event_entry_to_obj(cps_api_object_t obj,nas_mac_entry_t & entry,nas_l2_mac_op_t add, unsigned int index){
+
+static void nas_mac_add_event_entry_to_obj(cps_api_object_t obj,nas_mac_entry_t & entry,
+                                           nas_l2_mac_op_t add, unsigned int index){
 
     BASE_MAC_MAC_EVENT_TYPE_t ev_type;
     auto it = nas_to_pub_ev_type->find(add);
@@ -124,9 +142,11 @@ void nas_mac_add_event_entry_to_obj(cps_api_object_t obj,nas_mac_entry_t & entry
     cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&entry.ifindex,sizeof(entry.ifindex));
     ids[2] = BASE_MAC_LIST_ENTRIES_ACTIONS;
     cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&entry.pkt_action,sizeof(entry.pkt_action));
-    ids[2] = BASE_MAC_LIST_ENTRIES_VLAN;
-    cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U16,&entry.entry_key.vlan_id,
+    if(entry.entry_type != NDI_MAC_ENTRY_TYPE_1D_REMOTE){
+        ids[2] = BASE_MAC_LIST_ENTRIES_VLAN;
+        cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U16,&entry.entry_key.vlan_id,
                      sizeof(entry.entry_key.vlan_id));
+    }
     ids[2] = BASE_MAC_LIST_ENTRIES_MAC_ADDRESS;
     cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_BIN,(void*)&entry.entry_key.mac_addr,
          sizeof(entry.entry_key.mac_addr));
@@ -136,18 +156,55 @@ void nas_mac_add_event_entry_to_obj(cps_api_object_t obj,nas_mac_entry_t & entry
     ids[2] = BASE_MAC_LIST_ENTRIES_EVENT_TYPE;
     cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&ev_type,sizeof(ev_type));
 
-
     interface_ctrl_t intf_ctrl;
-    memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
 
-    intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
-    intf_ctrl.if_index = entry.ifindex;
+    if(entry.entry_type != NDI_MAC_ENTRY_TYPE_1D_REMOTE){
+        memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
 
-    if(dn_hal_get_interface_info(&intf_ctrl) == STD_ERR_OK) {
-     ids[2] = BASE_MAC_LIST_ENTRIES_IFNAME;
-     cps_api_object_e_add(obj,ids ,ids_len,cps_api_object_ATTR_T_BIN, (const void *)intf_ctrl.if_name,
-                                strlen(intf_ctrl.if_name)+1);
+        intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
+        intf_ctrl.if_index = entry.ifindex;
+
+        if(dn_hal_get_interface_info(&intf_ctrl) == STD_ERR_OK) {
+         ids[2] = BASE_MAC_LIST_ENTRIES_IFNAME;
+         cps_api_object_e_add(obj,ids ,ids_len,cps_api_object_ATTR_T_BIN, (const void *)intf_ctrl.if_name,
+                                    strlen(intf_ctrl.if_name)+1);
+        }
     }
+
+    if(entry.entry_type != NDI_MAC_ENTRY_TYPE_1Q){
+        memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
+
+        intf_ctrl.q_type = HAL_INTF_INFO_FROM_BRIDGE_ID;
+        intf_ctrl.bridge_id = entry.bridge_id;
+        intf_ctrl.int_type = nas_int_type_DOT1D_BRIDGE;
+
+        if(dn_hal_get_interface_info(&intf_ctrl) == STD_ERR_OK) {
+            ids[2] = BASE_MAC_LIST_ENTRIES_BR_NAME;
+            cps_api_object_e_add(obj,ids ,ids_len,cps_api_object_ATTR_T_BIN, (const void *)intf_ctrl.if_name,
+                                    strlen(intf_ctrl.if_name)+1);
+        }
+    }
+
+    if(entry.entry_type == NDI_MAC_ENTRY_TYPE_1D_REMOTE){
+        ids[2] = BASE_MAC_LIST_ENTRIES_ENDPOINT_IP_ADDR_FAMILY;
+        cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,&entry.endpoint_ip.af_index,
+                             sizeof(entry.endpoint_ip.af_index));
+        ids[2] = BASE_MAC_LIST_ENTRIES_ENDPOINT_IP_ADDR;
+        cps_api_object_e_add(obj,ids ,ids_len,cps_api_object_ATTR_T_BIN, (const void *)&entry.endpoint_ip.u,
+                                            sizeof(entry.endpoint_ip.u));
+
+        ids[2] = BASE_MAC_LIST_ENTRIES_IFNAME;
+        std::string _vtep_name;
+        if(nas_mac_get_vtep_name_from_tunnel_id(entry.endpoint_ip_id,_vtep_name)){
+             cps_api_object_e_add(obj,ids ,ids_len,cps_api_object_ATTR_T_BIN, (const void *)_vtep_name.c_str(),
+                                                _vtep_name.size()+1);
+        }
+
+    }
+
+    /*  just Log MAC entry  */
+    EV_LOGGING(L2MAC, INFO, "NAS-MAC", " MAC Event received : event Type :  %d", ev_type);
+    nas_mac_log_entry(&entry);
 
 }
 
@@ -157,6 +214,7 @@ static bool nas_mac_process_pub_queue(){
     cps_api_key_t key;
     cps_api_key_from_attr_with_qual(&key, BASE_MAC_LIST_OBJ,
                                        cps_api_qualifier_OBSERVED);
+    std::lock_guard<std::recursive_mutex> lk(mac_npu_queue_mtx);
     unsigned int entry_count = 0;
     while(nas_mac_event_queue.size() > 0){
         cps_api_object_t obj = cps_api_object_create();
@@ -175,12 +233,7 @@ static bool nas_mac_process_pub_queue(){
     }
     return true;
 }
-void nas_mac_flush_count_dump(void){
-    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Port flush count %lu",port_flush_count);
-    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","vlan flush count %lu",vlan_flush_count);
-    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Port vlan flush count %lu",port_vlan_flush_count);
-    EV_LOGGING(L2MAC,NOTICE,"FLUSH-COUNT","Total flush count %lu",(port_flush_count+vlan_flush_count+port_vlan_flush_count));
-}
+
 
 static t_std_error nas_mac_read_cps_notification(int fd, const size_t count,nas_mac_cps_event_queue_t & flush_list){
 
@@ -214,39 +267,88 @@ static t_std_error nas_mac_read_npu_notification(int fd, const size_t count){
         return rc;
     }
 
-    std::lock_guard<std::mutex> lk(mac_npu_event_mtx);
+    std::lock_guard<std::recursive_mutex> lk(mac_npu_queue_mtx);
     for(unsigned int ix = 0 ; ix < count ; ++ix){
         nas_mac_event_queue.push_back(mac_npu_event_vec[ix]);
     }
-    nas_mac_process_pub_queue();
 
     return STD_ERR_OK;
 }
 
+static auto _flush_str = new  std::map<int,const char *>
+{
+    {NDI_MAC_DEL_BY_PORT, "Port " },
+    {NDI_MAC_DEL_BY_VLAN, "Vlan "},
+    {NDI_MAC_DEL_BY_PORT_VLAN, "Port-Vlan"},
+    {NDI_MAC_DEL_BY_BRIDGE, " 1D Bridge" },
+    {NDI_MAC_DEL_BY_BRIDGE_ENDPOINT_IP, "Remote Endport IP" },
+    {NDI_MAC_DEL_BY_PORT_VLAN_SUBPORT, "1D bridge subport" }
+};
+
+
+static void nas_mac_flush_log_entry(nas_mac_entry_t *entry, ndi_mac_delete_type_t del_type) {
+
+    auto it = _flush_str->find(del_type);
+    if (it == _flush_str->end())  return;
+    switch(del_type)  {
+        case NDI_MAC_DEL_BY_PORT:
+            NAS_MAC_LOG( INFO, " MAC Flush based  %s for Interface Index: %d" , it->second, entry->ifindex);
+            break;
+        case NDI_MAC_DEL_BY_VLAN:
+            NAS_MAC_LOG(  INFO," MAC Flush based  %s for  Entry Type: 1Q, Vlan Id: %d, ", it->second, entry->entry_key.vlan_id);
+            break;
+        case NDI_MAC_DEL_BY_PORT_VLAN:
+             NAS_MAC_LOG( INFO," MAC Flush based  %s for  Entry Type: 1Q, Vlan Id: %d, Interface Index: %d, ",
+                        it->second, entry->entry_key.vlan_id, entry->ifindex);
+            break;
+        case NDI_MAC_DEL_BY_BRIDGE:
+            NAS_MAC_LOG( INFO," MAC Flush based  %s for  Entry Type: 1D,  Bridge Index: %d, ",
+                        it->second, entry->bridge_ifindex);
+            break;
+        case NDI_MAC_DEL_BY_BRIDGE_ENDPOINT_IP:
+        NAS_MAC_LOG(  INFO," MAC Flush based  %s for  Entry Type: 1D Remote , Bridge Index: %d, Remote IP: ",
+                        it->second, entry->bridge_ifindex);
+            break;
+        case NDI_MAC_DEL_BY_PORT_VLAN_SUBPORT:
+            NAS_MAC_LOG(  INFO, " MAC Flush based  %s for Entry Type: 1D, bridge Idx %d, Vlan Id: %d, Interface Index: %d, ",
+                        it->second, entry->bridge_ifindex, entry->entry_key.vlan_id, entry->ifindex);
+            break;
+        default:
+            return;
+    }
+    return;
+
+}
+
 
 t_std_error nas_mac_delete_entries_from_hw(nas_mac_entry_t *entry,
-                                           ndi_mac_delete_type_t del_type,
-                                           bool subtype_all) {
+                                           ndi_mac_delete_type_t del_type
+                                           ) {
     t_std_error rc = STD_ERR_OK;
     ndi_obj_id_t obj_id;
     interface_ctrl_t intf_ctrl;
-    memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
-    intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
-    intf_ctrl.if_index = entry->ifindex;
-    (void)subtype_all; // TODO Get the attribute from CPS
+
+    /*  Log flush request */
+    nas_mac_flush_log_entry(entry, del_type);
 
     ndi_mac_entry_t ndi_mac_entry;
     memset(&ndi_mac_entry, 0, sizeof(ndi_mac_entry_t));
-    if(del_type == NDI_MAC_DEL_BY_PORT){
-        port_flush_count +=1;
-    }else if(del_type == NDI_MAC_DEL_BY_VLAN){
-        vlan_flush_count +=1;
-    }else if(del_type == NDI_MAC_DEL_BY_PORT_VLAN){
-        port_vlan_flush_count +=1;
+
+    if(del_type == NDI_MAC_DEL_BY_BRIDGE_ENDPOINT_IP){
+        vni_rem_ip_t _rem_ip = {entry->endpoint_ip,entry->bridge_ifindex};
+        if(!_get_endpoint_tunnel_id(_rem_ip, ndi_mac_entry.endpoint_ip_port)){
+            return STD_ERR(MAC,FAIL,0);
+        }
+
     }
 
-    if ((del_type == NDI_MAC_DEL_BY_PORT) || (del_type == NDI_MAC_DEL_BY_PORT_VLAN))
+    if ((del_type == NDI_MAC_DEL_BY_PORT) || (del_type == NDI_MAC_DEL_BY_PORT_VLAN) ||
+        (del_type == NDI_MAC_DEL_BY_PORT_VLAN_SUBPORT))
     {
+        memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
+        intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
+        intf_ctrl.if_index = entry->ifindex;
+
         if ((rc = dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
              NAS_MAC_LOG(ERR, "Get interface info failed for if index 0x%x.", entry->ifindex);
              return rc;
@@ -267,7 +369,8 @@ t_std_error nas_mac_delete_entries_from_hw(nas_mac_entry_t *entry,
     }
 
     ndi_mac_entry.vlan_id = entry->entry_key.vlan_id;
-
+    ndi_mac_entry.mac_entry_type = entry->entry_type;
+    ndi_mac_entry.bridge_id = entry->bridge_id;
     if (del_type == NDI_MAC_DEL_SINGLE_ENTRY) {
         memcpy(ndi_mac_entry.mac_addr, entry->entry_key.mac_addr, sizeof(hal_mac_addr_t));
     }
@@ -283,23 +386,23 @@ t_std_error nas_mac_delete_entries_from_hw(nas_mac_entry_t *entry,
         nas_mac_publish_flush_event(del_type,entry);
     }
 
+    _flush_count[del_type]+=1;
+    _flush_count[NDI_MAC_DEL_INVALID_TYPE]+=1;
+
+
     return STD_ERR_OK;
 }
 
 
-static void nas_mac_clear_hw_mac(nas_mac_cps_event_t & req_entry){
+t_std_error nas_mac_clear_hw_mac(nas_mac_cps_event_t & req_entry){
 
-    if(nas_mac_delete_entries_from_hw(&(req_entry.entry),
-                                req_entry.del_type,req_entry.subtype_all) != STD_ERR_OK){
-        NAS_MAC_LOG(ERR,"Failed to remove MAC entry from hardware");
+    t_std_error rc =STD_ERR_OK;
+    if((rc = nas_mac_delete_entries_from_hw(&(req_entry.entry),
+                                req_entry.del_type)) != STD_ERR_OK){
+        NAS_MAC_LOG(ERR,"Failed to remove or flush  MAC entry from hardware");
+        return rc;
     }
-
-
-    if(req_entry.del_type == NDI_MAC_DEL_ALL_ENTRIES){
-        std::lock_guard<std::mutex> lk(mac_npu_event_mtx);
-        nas_mac_event_queue.clear();
-        return;
-    }
+    return STD_ERR_OK;
 }
 
 static void nas_mac_compact_flush_requests(){
@@ -325,13 +428,25 @@ static void nas_mac_compact_flush_requests(){
         nas_mac_clear_hw_mac(it->second);
     }
 
+    for(auto it = bridge_flush_queue->begin(); it != bridge_flush_queue->end(); ++it){
+           nas_mac_clear_hw_mac(it->second);
+    }
+
+    for(auto it = bridge_endpoint_queue->begin(); it != bridge_endpoint_queue->end(); ++it){
+        nas_mac_clear_hw_mac(it->second);
+    }
+
     for(auto it = mac_delete_queue->begin(); it != mac_delete_queue->end(); ++it){
         nas_mac_clear_hw_mac(*it);
     }
+
     mac_delete_queue->clear();
     port_flush_queue->clear();
     vlan_flush_queue->clear();
     port_vlan_flush_queue->clear();
+    bridge_flush_queue->clear();
+    bridge_endpoint_queue->clear();
+
 
 }
 
@@ -351,7 +466,17 @@ static void nas_mac_drain_cps_queue(int fd,size_t count){
             vlan_flush_queue->insert({req_entry.entry.entry_key.vlan_id,std::move(req_entry)});
             break;
 
+        case NDI_MAC_DEL_BY_BRIDGE:
+            bridge_flush_queue->insert({req_entry.entry.bridge_ifindex,req_entry});
+            break;
+
+        case NDI_MAC_DEL_BY_BRIDGE_ENDPOINT_IP:
+            bridge_endpoint_queue->insert({{req_entry.entry.endpoint_ip,
+                                            req_entry.entry.bridge_ifindex},req_entry});
+            break;
+
         case NDI_MAC_DEL_BY_PORT_VLAN:
+        case NDI_MAC_DEL_BY_PORT_VLAN_SUBPORT:
         {
             port_vlan_flush_t pv;
             pv.ifindex=req_entry.entry.ifindex;
@@ -401,6 +526,7 @@ static void nas_mac_process_npu_events(int fd){
     }
 
     nas_mac_read_npu_notification(fd,ev_hdr.len);
+    nas_mac_process_pub_queue();
 
 }
 

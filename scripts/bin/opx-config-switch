@@ -15,7 +15,7 @@
 
 import sys
 import nas_switch_utils
-import nas_ut_framework as nas_ut
+import nas_common_utils as nas_common
 
 
 def show_switch(args):
@@ -24,7 +24,7 @@ def show_switch(args):
 
 def set_switch_attrs(args):
     ch = nas_switch_utils.create_switch_set_op(args)
-    ret = nas_ut.get_cb_method("set")(ch)
+    ret = nas_common.get_cb_method("set")(ch)
     if (str(ret) == 'False'):
         print "Unable to set attribute, check the attr and the values"
 
