@@ -1,3 +1,12 @@
+opx-nas-l2 (1.22.1) unstable; urgency=medium
+
+  * Feature: Buffer statistics
+  * Feature: Support deep buffer in s4200
+  * Bugfix: 'Ifindex/MAC/VLAN Missing for creating/updating MACEntry in the kernel bridge'
+            message continuously seen in journalctrl log
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Sun, 18 Nov 2018 14:38:23 -0800
+
 opx-nas-l2 (1.22.0+opx3) unstable; urgency=medium
 
   * Feature: Static L2 VxLAN Support
