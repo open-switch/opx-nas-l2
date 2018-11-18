@@ -162,6 +162,7 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
     const npu_id_t * npus = npu_list_from_switch(sw);
     char profile[NAS_CMN_PROFILE_NAME_SIZE + 1] = {0};
     uint32_t l2_size, l3_size, l3_host_size, in_uft_mode;
+    bool dbm_enabled = false;
 
     l2_size = l3_size = l3_host_size = 0, in_uft_mode = 0;
 
@@ -227,6 +228,8 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_EGRESS_BUFFER_POOL_NUM:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_COUNTER_REFRESH_INTERVAL:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECN_ECT_THRESHOLD_ENABLE:
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_BST_ENABLE:
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_BST_TRACKING_MODE:
 
                 if (ndi_switch_get_attribute(*npus,
                             (BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t)*attr_it,
@@ -358,6 +361,25 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
                 if (nas_sw_profile_ipv6_ext_prefix_route_lpm_blk_size_get(&param.u32)
                     == STD_ERR_OK) {
                     cps_api_object_attr_add_u32(obj, *attr_it,param.u32);
+                }
+                break;
+
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_DEEP_BUFFER_MODE_ENABLE:
+                if (qualifier == cps_api_qualifier_OBSERVED)
+                {
+                    if (nas_sw_profile_cur_deep_buffer_mode_get(&dbm_enabled)
+                            == STD_ERR_OK)
+                    {
+                        cps_api_object_attr_add_u32(obj, *attr_it,(uint32_t)dbm_enabled);
+                    }
+                }
+                else
+                {
+                    if (nas_sw_profile_conf_deep_buffer_mode_get(&dbm_enabled)
+                            == STD_ERR_OK)
+                    {
+                        cps_api_object_attr_add_u32(obj, *attr_it,(uint32_t)dbm_enabled);
+                    }
                 }
                 break;
 
@@ -533,6 +555,32 @@ static cps_api_return_code_t nas_set_ipv6_ext_prefix_routes(BASE_SWITCH_SWITCHIN
     return cps_api_ret_code_OK;
 }
 
+/* Currently this value will be applied only on reboot, this is sent to NDI on next boot init */
+static cps_api_return_code_t nas_set_deep_buffer_mode(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t attr,
+        npu_id_t npu, cps_api_object_t obj) {
+
+    t_std_error ret;
+    bool enable = true;
+
+    cps_api_object_attr_t _attr = cps_api_object_attr_get(obj,attr);
+
+    if (_attr==NULL) return cps_api_ret_code_ERR;
+
+    /*
+     * 'no deep-buffer-mode' will send CPS set with NULL length
+     */
+    if (cps_api_object_attr_len(_attr) == 0) {
+        enable = false;
+    }
+
+    ret = nas_sw_profile_conf_deep_buffer_mode_set(enable);
+    if (ret != STD_ERR_OK)
+    {
+        return cps_api_ret_code_ERR;
+    }
+    return cps_api_ret_code_OK;
+}
+
 static const auto   _set_attr_handlers = new std::unordered_map<cps_api_attr_id_t,
         cps_api_return_code_t (*)(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t, npu_id_t, cps_api_object_t)>{
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAC_AGE_TIMER, _set_generic_u32},
@@ -548,6 +596,9 @@ static const auto   _set_attr_handlers = new std::unordered_map<cps_api_attr_id_
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE, nas_set_uft_mode },
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECN_ECT_THRESHOLD_ENABLE, _set_generic_u32 },
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_IPV6_EXTENDED_PREFIX_ROUTES, nas_set_ipv6_ext_prefix_routes },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_BST_ENABLE, _set_generic_u32 },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_BST_TRACKING_MODE, _set_generic_u32 },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_DEEP_BUFFER_MODE_ENABLE, nas_set_deep_buffer_mode },
 };
 
 static void remove_same_values(cps_api_object_t now, cps_api_object_t req) {
