@@ -357,6 +357,10 @@ static t_std_error nas_mac_obj_to_entry (cps_api_object_t obj, nas_mac_entry_t *
 
 t_std_error nas_mac_update_entry_in_os(nas_mac_entry_t *entry,
                                        cps_api_operation_types_t op){
+     if(entry->entry_type == NDI_MAC_ENTRY_TYPE_1D_REMOTE){
+        NAS_MAC_LOG(INFO,"MAC entry update not supported for 1D remote.");
+        return STD_ERR_OK;
+     }
      cps_api_object_guard og(cps_api_object_create());
      if(og.get() == nullptr) return STD_ERR(MAC,NOMEM,0);
      cps_api_object_set_type_operation(cps_api_object_key(og.get()),op);
@@ -1323,7 +1327,6 @@ bool nas_get_mac_entry_from_ndi(nas_mac_entry_t & entry){
 static bool _process_pending_macs(vni_rem_ip_t & _rem_ip){
     auto it = vxlan_pending_macs.find(_rem_ip);
     if (it == vxlan_pending_macs.end()){
-        NAS_MAC_LOG(ERR,"Failed to find pending mac for bridge %d",_rem_ip.br_index);
         return false;
     }
 
