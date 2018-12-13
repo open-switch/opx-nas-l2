@@ -1,3 +1,4 @@
+#!/bin/bash
 #
 # Copyright (c) 2018 Dell Inc.
 #
@@ -14,7 +15,6 @@
 # permissions and limitations under the License.
 #
 
-#!/bin/bash
 
 apt-get update
 
