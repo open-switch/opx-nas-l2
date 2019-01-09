@@ -44,3 +44,6 @@ libopx_nas_l2_la_CXXFLAGS=-std=c++11
 libopx_nas_l2_la_CFLAGS=$(C_HARDEN_FLAGS)
 libopx_nas_l2_la_LDFLAGS=-shared -version-info 1:1:0 $(LD_HARDEN_FLAGS)
 libopx_nas_l2_la_LIBADD=-lopx_nas_linux -lopx_common -lopx_nas_common -lopx_nas_ndi -lopx_cps_api_common -lopx_logging
+
+sosdir=/usr/share/sosreport/sos/plugins
+sos_DATA=sos/*
