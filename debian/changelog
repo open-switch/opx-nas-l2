@@ -1,6 +1,12 @@
-opx-nas-l2 (1.24.1) unstable; urgency=medium
+opx-nas-l2 (1.23.1) unstable; urgency=medium
 
-  * Feature: Add VRF support
+  * bugfix: pass VRF id for ifindex to name mapping
+  * feature: add support for MAC age-out disable
+  * update: publish bridge index when MAC del/clear happens so a neighbor manager can refresh ARP
+  * update: support for ID local MAC and tunnel end-point MAC get
+  * update: move multicast code to opx-nas-multicast
+  * update: Add support for switch statistics
+  * update: CPS get observed/target support for L3 RIF and nexthops table sizes and VXLAN HW RIFS and nexthops attributes
 
  -- Dell EMC <ops-dev@lists.openswitch.net>  Wed, 05 Jun 2019 14:38:23 -0800
 
