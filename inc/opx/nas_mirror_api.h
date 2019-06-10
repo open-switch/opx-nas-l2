@@ -96,7 +96,7 @@ public:
     BASE_MIRROR_MODE_t get_mode(){ return ndi_mirror_entry.mode ;}
     ndi_mirror_id_t get_ndi_id(){ return ndi_mirror_entry.ndi_mirror_id ;}
     const ndi_port_t * get_dst_port(){ return &ndi_mirror_entry.dst_port; }
-    const npu_id_t get_npu_id(){return ndi_mirror_entry.dst_port.npu_id ; }
+    npu_id_t get_npu_id(){return ndi_mirror_entry.dst_port.npu_id ; }
     ndi_mirror_entry_t * get_ndi_entry(){ return &ndi_mirror_entry ;}
     uint8_t get_ttl(){ return ndi_mirror_entry.ttl ; }
     uint8_t get_dscp(){ return ndi_mirror_entry.dscp ; }

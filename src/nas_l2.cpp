@@ -29,7 +29,6 @@
 #include "nas_hash_cps.h"
 #include "nas_switch_cps.h"
 #include "nas_switch_log.h"
-#include "nas_mc_util.h"
 
 #define NUM_L2_CPS_API_THREAD 1
 
@@ -73,10 +72,6 @@ t_std_error nas_l2_init(void) {
     }
 
     if((rc = nas_mac_init(mac_handle)) != STD_ERR_OK){
-        return rc;
-    }
-
-    if((rc = nas_mc_init()) != STD_ERR_OK){
         return rc;
     }
 

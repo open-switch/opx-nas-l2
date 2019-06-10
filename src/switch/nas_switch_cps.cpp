@@ -24,6 +24,7 @@
 #include "cps_api_operation.h"
 #include "cps_api_db_interface.h"
 #include "event_log.h"
+#include "std_time_tools.h"
 
 #include "nas_ndi_switch.h"
 #include "cps_api_events.h"
@@ -161,7 +162,10 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
     std::vector <uint32_t> attrlist;
     const npu_id_t * npus = npu_list_from_switch(sw);
     char profile[NAS_CMN_PROFILE_NAME_SIZE + 1] = {0};
-    uint32_t l2_size, l3_size, l3_host_size, in_uft_mode;
+    uint32_t l2_size, l3_size, l3_host_size, in_uft_mode,
+             cur_vxlan_riot_status = 0, conf_vxlan_riot_status = 0,
+             cur_vxlan_overlay_rifs = 0, conf_vxlan_overlay_rifs = 0,
+             cur_vxlan_overlay_nhs = 0, conf_vxlan_overlay_nhs = 0;
     bool dbm_enabled = false;
 
     l2_size = l3_size = l3_host_size = 0, in_uft_mode = 0;
@@ -213,6 +217,7 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_BRIDGE_TABLE_SIZE:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECMP_HASH_ALGORITHM:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECMP_HASH_SEED_VALUE:
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECMP_GROUP_SIZE:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAC_AGE_TIMER:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ACL_TABLE_MIN_PRIORITY:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ACL_TABLE_MAX_PRIORITY:
@@ -223,6 +228,7 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_NUM_MULTICAST_QUEUES_PER_PORT:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_NUM_QUEUES_CPU_PORT:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_NUM_QUEUES_PER_PORT:
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_QOS_RATE_ADJUST:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_TOTAL_BUFFER_SIZE:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_INGRESS_BUFFER_POOL_NUM:
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_EGRESS_BUFFER_POOL_NUM:
@@ -363,6 +369,49 @@ static void _fill_obj_for_switch(cps_api_object_t obj, cps_api_object_t filter,
                     cps_api_object_attr_add_u32(obj, *attr_it,param.u32);
                 }
                 break;
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_VXLAN_RIOT_ENABLE:
+                if (nas_sw_profile_vxlan_riot_status_get(&cur_vxlan_riot_status,
+                                                         &conf_vxlan_riot_status) == STD_ERR_OK) {
+                    if (qualifier == cps_api_qualifier_OBSERVED) {
+                        cps_api_object_attr_add_u32(obj, *attr_it, cur_vxlan_riot_status);
+                    } else {
+                        cps_api_object_attr_add_u32(obj, *attr_it, conf_vxlan_riot_status);
+                    }
+                }
+                break;
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_VXLAN_OVERLAY_RIFS:
+                if (nas_sw_profile_max_vxlan_overlay_rifs_get(&cur_vxlan_overlay_rifs,
+                                                              &conf_vxlan_overlay_rifs) == STD_ERR_OK) {
+                    if (qualifier == cps_api_qualifier_OBSERVED) {
+                        cps_api_object_attr_add_u32(obj, *attr_it, cur_vxlan_overlay_rifs);
+                    } else {
+                        cps_api_object_attr_add_u32(obj, *attr_it, conf_vxlan_overlay_rifs);
+                    }
+                }
+
+                break;
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_VXLAN_OVERLAY_NEXTHOPS:
+                if (nas_sw_profile_max_vxlan_overlay_nhs_get(&cur_vxlan_overlay_nhs,
+                                                             &conf_vxlan_overlay_nhs) == STD_ERR_OK) {
+                    if (qualifier == cps_api_qualifier_OBSERVED) {
+                        cps_api_object_attr_add_u32(obj, *attr_it, cur_vxlan_overlay_nhs);
+                    } else {
+                        cps_api_object_attr_add_u32(obj, *attr_it, conf_vxlan_overlay_nhs);
+                    }
+                }
+                break;
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_RIF_TABLE_SIZE:
+                if (nas_sw_profile_rif_table_size_get(&param.u32)
+                    == STD_ERR_OK) {
+                    cps_api_object_attr_add_u32(obj, *attr_it,param.u32);
+                }
+                break;
+            case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_L3_NEXTHOP_TABLE_SIZE:
+                if (nas_sw_profile_l3_nexthop_table_size_get(&param.u32)
+                    == STD_ERR_OK) {
+                    cps_api_object_attr_add_u32(obj, *attr_it,param.u32);
+                }
+                break;
 
             case BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_DEEP_BUFFER_MODE_ENABLE:
                 if (qualifier == cps_api_qualifier_OBSERVED)
@@ -412,6 +461,105 @@ static cps_api_return_code_t _switch_get (void * context, cps_api_get_params_t *
 
     return cps_api_ret_code_OK;
 }
+
+static const auto &  _switch_stats = * new std::vector<BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS_t>
+{
+    BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS_AVAILABLE_IPV4_ROUTE_ENTRIES,
+    BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS_AVAILABLE_IPV6_ROUTE_ENTRIES,
+    BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS_AVAILABLE_IPV4_NEIGHBOUR_ENTRIES,
+    BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS_AVAILABLE_IPV6_NEIGHBOUR_ENTRIES,
+    BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS_AVAILABLE_FDB_ENTRIES,
+};
+
+
+static void _switch_all_stat_id_get (std::vector<BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS_t>* counter_ids)
+{
+    for (auto it = _switch_stats.begin();
+         it != _switch_stats.end(); ++it) {
+        counter_ids->push_back((BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS_t)*it);
+    }
+}
+
+static void _switch_stats_obj_stats_get (cps_api_object_t obj, std::vector<BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS_t>* counter_ids)
+{
+    cps_api_object_it_t    it;
+    cps_api_attr_id_t      attr_id;
+
+
+    if (obj == NULL) return;
+
+    cps_api_object_it_begin(obj, &it);
+
+    while (cps_api_object_it_valid(&it)) {
+
+        attr_id = cps_api_object_attr_id (it.attr);
+
+        if ((attr_id != BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS_SWITCH_ID)
+                && (attr_id != CPS_API_OBJ_KEY_ATTRS)) {
+            counter_ids->push_back((BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS_t)attr_id);
+        }
+
+        cps_api_object_it_next (&it);
+    }
+
+    return;
+}
+
+static cps_api_return_code_t _fill_obj_for_switch_stats(cps_api_object_t obj, cps_api_object_t filter,
+                                 BASE_CMN_LOGICAL_SWITCH_ID_t sw) {
+    bool is_empty = true;
+    const npu_id_t * npus = npu_list_from_switch(sw);
+
+    STD_ASSERT(npus!=NULL);
+
+    std::vector<BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS_t> counter_ids;
+    _switch_stats_obj_stats_get(filter, &counter_ids);
+
+    is_empty = counter_ids.size() == 0 ? true : false ;
+
+    if (is_empty == true) {
+        _switch_all_stat_id_get(&counter_ids);
+    }
+
+    std::vector<uint64_t> counters(counter_ids.size());
+    if (ndi_switch_get_statistics(*npus,
+                                  &counter_ids[0],
+                                  counter_ids.size(),
+                                  &counters[0]) != STD_ERR_OK) {
+        return cps_api_ret_code_ERR;
+    }
+
+    cps_api_object_attr_add_u32(obj, BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS_SWITCH_ID,sw);
+    for (uint_t i=0; i< counter_ids.size(); i++) {
+        cps_api_object_attr_add_u64(obj, counter_ids[i], counters[i]);
+    }
+
+    uint64_t time_from_epoch = std_time_get_current_from_epoch_in_nanoseconds();
+    cps_api_object_set_timestamp(obj,time_from_epoch);
+    return cps_api_ret_code_OK;
+}
+
+static cps_api_return_code_t _switch_stats_get (void * context, cps_api_get_params_t * param,
+        size_t key_ix) {
+    cps_api_object_t filt = cps_api_object_list_get(param->filters,key_ix);
+
+    cps_api_object_attr_t _switch = cps_api_get_key_data(filt,BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_SWITCH_ID);
+
+    size_t ix = 0;
+    size_t mx = number_of_switches();
+    for ( ; ix < mx ; ++ix ) {
+        if (_switch!=NULL && cps_api_object_attr_data_u32(_switch)!=ix) continue;
+        if (npu_list_from_switch_len((BASE_CMN_LOGICAL_SWITCH_ID_t)ix) ==0 ) continue;
+
+        cps_api_object_t obj = create_obj_on_list(param->list, BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS);
+        if(obj==NULL) return cps_api_ret_code_ERR;
+
+        _fill_obj_for_switch_stats(obj, filt, (BASE_CMN_LOGICAL_SWITCH_ID_t)ix);
+    }
+
+    return cps_api_ret_code_OK;
+}
+
 
 static cps_api_return_code_t _switch_observed_get (void * context,
                                         cps_api_get_params_t * param,
@@ -556,6 +704,51 @@ static cps_api_return_code_t nas_set_ipv6_ext_prefix_routes(BASE_SWITCH_SWITCHIN
 }
 
 /* Currently this value will be applied only on reboot, this is sent to NDI on next boot init */
+static cps_api_return_code_t nas_set_vxlan_riot_enable(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t attr,
+                                                       npu_id_t npu, cps_api_object_t obj) {
+    cps_api_operation_types_t op_type = cps_api_object_type_operation(cps_api_object_key(obj));
+    cps_api_object_attr_t _attr = cps_api_object_attr_get(obj,attr);
+    if (_attr==NULL)
+        return cps_api_ret_code_ERR;
+
+    uint32_t vxlan_riot_config = cps_api_object_attr_data_u32(_attr);
+    t_std_error ret = nas_sw_profile_vxlan_riot_status_set(vxlan_riot_config, op_type);
+    if (ret != STD_ERR_OK)
+        return cps_api_ret_code_ERR;
+
+    return cps_api_ret_code_OK;
+}
+
+static cps_api_return_code_t nas_set_vxlan_overlay_rifs(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t attr,
+                                                       npu_id_t npu, cps_api_object_t obj) {
+    cps_api_operation_types_t op_type = cps_api_object_type_operation(cps_api_object_key(obj));
+    cps_api_object_attr_t _attr = cps_api_object_attr_get(obj,attr);
+    if (_attr==NULL)
+        return cps_api_ret_code_ERR;
+
+    uint32_t vxlan_riot_overlay_rifs_config = cps_api_object_attr_data_u32(_attr);
+    t_std_error ret = nas_sw_profile_max_vxlan_overlay_rifs_set(vxlan_riot_overlay_rifs_config, op_type);
+    if (ret != STD_ERR_OK)
+        return cps_api_ret_code_ERR;
+
+    return cps_api_ret_code_OK;
+}
+
+static cps_api_return_code_t nas_set_overlay_nexthops(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t attr,
+                                                       npu_id_t npu, cps_api_object_t obj) {
+    cps_api_operation_types_t op_type = cps_api_object_type_operation(cps_api_object_key(obj));
+    cps_api_object_attr_t _attr = cps_api_object_attr_get(obj,attr);
+    if (_attr==NULL)
+        return cps_api_ret_code_ERR;
+
+    uint32_t vxlan_riot_overlay_nhs_config = cps_api_object_attr_data_u32(_attr);
+    t_std_error ret = nas_sw_profile_max_vxlan_overlay_nhs_set(vxlan_riot_overlay_nhs_config, op_type);
+    if (ret != STD_ERR_OK)
+        return cps_api_ret_code_ERR;
+
+    return cps_api_ret_code_OK;
+}
+
 static cps_api_return_code_t nas_set_deep_buffer_mode(BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_t attr,
         npu_id_t npu, cps_api_object_t obj) {
 
@@ -596,9 +789,13 @@ static const auto   _set_attr_handlers = new std::unordered_map<cps_api_attr_id_
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_UFT_MODE, nas_set_uft_mode },
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_ECN_ECT_THRESHOLD_ENABLE, _set_generic_u32 },
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_IPV6_EXTENDED_PREFIX_ROUTES, nas_set_ipv6_ext_prefix_routes },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_VXLAN_RIOT_ENABLE, nas_set_vxlan_riot_enable },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_VXLAN_OVERLAY_RIFS, nas_set_vxlan_overlay_rifs },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_VXLAN_OVERLAY_NEXTHOPS, nas_set_overlay_nexthops },
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_BST_ENABLE, _set_generic_u32 },
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_BST_TRACKING_MODE, _set_generic_u32 },
     { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_DEEP_BUFFER_MODE_ENABLE, nas_set_deep_buffer_mode },
+    { BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_QOS_RATE_ADJUST, _set_generic_u32 },
 };
 
 static void remove_same_values(cps_api_object_t now, cps_api_object_t req) {
@@ -751,6 +948,37 @@ static t_std_error nas_switch_cps_init_entities(cps_api_operation_handle_t handl
         EV_LOGGING(NAS_L2,ERR,"NAS-SWITCH-CPS","Failed to initilaize the counter refresh interval to %d",
                 nas_def_counter_refresh_interval);
     }
+
+    memset(&f,0,sizeof(f));
+
+    if (!cps_api_key_from_attr_with_qual(&f.key, BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS, cps_api_qualifier_TARGET)) {
+        EV_LOGGING(NAS_L2,ERR,"NAS-L2-SWITCH","Could not translate %d to key %s",
+                   (int)(BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS),cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+        return STD_ERR(CPSNAS,FAIL,0);
+    }
+    EV_LOGGING(NAS_L2,INFO,"NAS-L2-SWITCH","Registering for %s",
+               cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+    f.handle = handle;
+    f._read_function = _switch_stats_get;
+    if (cps_api_register(&f)!=cps_api_ret_code_OK) {
+        return STD_ERR(CPSNAS,FAIL,0);
+    }
+
+    memset(&f,0,sizeof(f));
+
+    if (!cps_api_key_from_attr_with_qual(&f.key, BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS, cps_api_qualifier_REALTIME)) {
+        EV_LOGGING(NAS_L2,ERR,"NAS-L2-SWITCH","Could not translate %d to key %s",
+                   (int)(BASE_SWITCH_SWITCHING_ENTITIES_SWITCH_STATS),cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+        return STD_ERR(CPSNAS,FAIL,0);
+    }
+    EV_LOGGING(NAS_L2,INFO,"NAS-L2-SWITCH","Registering for %s",
+               cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+    f.handle = handle;
+    f._read_function = _switch_stats_get;
+    if (cps_api_register(&f)!=cps_api_ret_code_OK) {
+        return STD_ERR(CPSNAS,FAIL,0);
+    }
+
     return STD_ERR_OK;
 }
 
@@ -786,6 +1014,8 @@ static t_std_error nas_switch_cps_init_switch(cps_api_operation_handle_t handle)
     if (cps_api_register(&f)!=cps_api_ret_code_OK) {
         return STD_ERR(CPSNAS,FAIL,0);
     }
+
+
     return STD_ERR_OK;
 }
 

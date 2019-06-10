@@ -25,6 +25,7 @@
 #include "cps_api_operation.h"
 #include "cps_class_map.h"
 #include "hal_if_mapping.h"
+#include "nas_com_bridge_utils.h"
 #include "nas_ndi_mac.h"
 #include "nas_base_utils.h"
 #include "nas_linux_l2.h"
@@ -110,7 +111,7 @@ bool nas_mac_get_vtep_name_from_tunnel_id(ndi_obj_id_t id, std::string & s){
     return true;
 }
 
-static bool nas_mac_validate_params(nas::attr_set_t & attrs, cps_api_operation_types_t op){
+static bool nas_mac_validate_params(nas::attr_set_t & attrs, nas_mac_entry_t *entry, cps_api_operation_types_t op){
 
     if(op == cps_api_oper_DELETE){
         return true;
@@ -119,9 +120,12 @@ static bool nas_mac_validate_params(nas::attr_set_t & attrs, cps_api_operation_t
         return false;
     }
 
-    if( op == cps_api_oper_CREATE){
 
-        if (attrs.contains(BASE_MAC_FORWARDING_TABLE_BR_NAME) && attrs.contains(BASE_MAC_TABLE_IFINDEX)){
+    if( op == cps_api_oper_CREATE){
+        if ((entry->pkt_action == BASE_MAC_PACKET_ACTION_TRAP) &&
+                ((attrs.contains(BASE_MAC_FORWARDING_TABLE_BR_NAME)) || (attrs.contains(BASE_MAC_TABLE_VLAN)))) {
+            return true;
+        } else if (attrs.contains(BASE_MAC_FORWARDING_TABLE_BR_NAME) && attrs.contains(BASE_MAC_TABLE_IFINDEX)){
             if((attrs.contains(BASE_MAC_FORWARDING_TABLE_ENDPOINT_IP) &&
                attrs.contains(BASE_MAC_FORWARDING_TABLE_ENDPOINT_IP_ADDR_FAMILY)) ||
                 (attrs.contains(BASE_MAC_TABLE_VLAN) ))
@@ -178,6 +182,7 @@ static t_std_error nas_mac_obj_to_entry (cps_api_object_t obj, nas_mac_entry_t *
     entry->npu_configured = true;
     entry->os_configured =false;
     entry->is_static = false;
+    entry->age_out_disable = false;
     entry->pkt_action = BASE_MAC_PACKET_ACTION_FORWARD;
     entry->entry_type = NDI_MAC_ENTRY_TYPE_1Q;
     entry->cache = false;
@@ -260,6 +265,10 @@ static t_std_error nas_mac_obj_to_entry (cps_api_object_t obj, nas_mac_entry_t *
                 }
                 break;
 
+            case BASE_MAC_FORWARDING_TABLE_AGE_OUT_DISABLE:
+                entry->age_out_disable = cps_api_object_attr_data_u32(it.attr);
+                break;
+
             case BASE_MAC_TABLE_CONFIGURE_OS:
             case BASE_MAC_FORWARDING_TABLE_CONFIGURE_OS:
                 entry->os_configured = cps_api_object_attr_data_u32(it.attr);
@@ -337,7 +346,7 @@ static t_std_error nas_mac_obj_to_entry (cps_api_object_t obj, nas_mac_entry_t *
         }
     }
 
-    if(!nas_mac_validate_params(attrs,op)){
+    if(!nas_mac_validate_params(attrs, entry, op)){
         NAS_MAC_LOG(ERR,"Failed to validate mac request");
         return STD_ERR(MAC,FAIL,0);
     }
@@ -357,15 +366,12 @@ static t_std_error nas_mac_obj_to_entry (cps_api_object_t obj, nas_mac_entry_t *
 
 t_std_error nas_mac_update_entry_in_os(nas_mac_entry_t *entry,
                                        cps_api_operation_types_t op){
-     if(entry->entry_type == NDI_MAC_ENTRY_TYPE_1D_REMOTE){
-        NAS_MAC_LOG(INFO,"MAC entry update not supported for 1D remote.");
-        return STD_ERR_OK;
-     }
      cps_api_object_guard og(cps_api_object_create());
      if(og.get() == nullptr) return STD_ERR(MAC,NOMEM,0);
      cps_api_object_set_type_operation(cps_api_object_key(og.get()),op);
      cps_api_object_attr_add_u32(og.get(),BASE_MAC_TABLE_IFINDEX,entry->ifindex);
      cps_api_object_attr_add_u32(og.get(),BASE_MAC_TABLE_STATIC,entry->is_static);
+     cps_api_object_attr_add_u32(og.get(),BASE_MAC_FORWARDING_TABLE_AGE_OUT_DISABLE, entry->age_out_disable);
      cps_api_object_attr_add_u16(og.get(),BASE_MAC_TABLE_VLAN,entry->entry_key.vlan_id);
      cps_api_object_attr_add(og.get(),BASE_MAC_TABLE_MAC_ADDRESS,(void *)&entry->entry_key.mac_addr,
                                  sizeof(entry->entry_key.mac_addr));
@@ -379,6 +385,17 @@ t_std_error nas_mac_update_entry_in_os(nas_mac_entry_t *entry,
      if(dn_hal_get_interface_info(&intf_ctrl) == STD_ERR_OK) {
          cps_api_object_attr_add(og.get(),BASE_MAC_TABLE_IFNAME,(void *)intf_ctrl.if_name,
                                      strlen(intf_ctrl.if_name)+1);
+     }
+    cps_api_attr_id_t ids[3] = {BASE_MAC_FORWARDING_TABLE_ENDPOINT_IP, 0, BASE_MAC_FORWARDING_TABLE_ENDPOINT_IP_ADDR_FAMILY};
+    const int ids_len = sizeof(ids)/sizeof(ids[0]);
+     if (entry->entry_type == NDI_MAC_ENTRY_TYPE_1D_REMOTE) {
+         /*  Add remote IP  addr family type and Remote IP */
+        cps_api_object_e_add(og.get(),ids,ids_len,cps_api_object_ATTR_T_U32,&entry->endpoint_ip.af_index,
+                             sizeof(entry->endpoint_ip.af_index));
+
+        ids[2] = BASE_MAC_FORWARDING_TABLE_ENDPOINT_IP_ADDR;
+        cps_api_object_e_add(og.get(),ids ,ids_len,cps_api_object_ATTR_T_BIN, (const void *)&entry->endpoint_ip.u,
+                                            sizeof(entry->endpoint_ip.u));
      }
      t_std_error rc = nas_os_mac_update_entry(og.get());
      return rc;
@@ -607,12 +624,19 @@ static bool _process_mac_entry(nas_mac_entry_t & entry){
             return false;
         }
     }
+    const char *mac = (const char *)&(entry.entry_key.mac_addr[0]);
+    NAS_MAC_LOG(DEBUG,
+         " process MAC %02x:%02x:%02x:%02x:%02x:%02x for  br index: %d",
+         mac[0],mac[1],mac[2], mac[3],mac[4],mac[5],
+         entry.bridge_ifindex);
 
     if(entry.npu_configured == true){
-        if((nas_mac_create_entry_hw(&entry))!=STD_ERR_OK){
+        if (!_check_if_flooding_mac(entry.entry_key.mac_addr)) {
+            if((nas_mac_create_entry_hw(&entry))!=STD_ERR_OK){
                 return false;
+            }
         }
-        if(entry.publish){
+        if(entry.publish) {
             nas_mac_send_event_notification(entry,NAS_MAC_ADD);
         }
     }
@@ -692,7 +716,7 @@ static bool nas_mac_process_fdb_event(nas_mac_entry_t & entry, nas::attr_set_t &
     }
     attr.add(BASE_MAC_FORWARDING_TABLE_BR_NAME);
 
-    if(!nas_mac_validate_params(attr,op)){
+    if(!nas_mac_validate_params(attr,&entry, op)){
         return false;
     }
 
@@ -766,8 +790,10 @@ static t_std_error nas_mac_update_entry(nas_mac_entry_t *entry){
             op = cps_api_oper_SET;
         }
 
-        if((rc = nas_mac_update_entry_in_os(entry,op))!= STD_ERR_OK){
-            return rc;
+        if (entry->os_configured) {
+            if((rc = nas_mac_update_entry_in_os(entry,op))!= STD_ERR_OK){
+                return rc;
+            }
         }
 
         if(entry->npu_configured){
@@ -884,6 +910,7 @@ t_std_error nas_mac_send_cps_event(nas_mac_cps_event_t * entries, int count){
 t_std_error nas_mac_cps_delete_entry (cps_api_object_t obj){
 
     nas_mac_cps_event_t flush_entry;
+    memset(&flush_entry, 0 , sizeof(flush_entry));
     t_std_error rc;
     if ((rc = nas_mac_obj_to_entry(obj, &flush_entry.entry)) != STD_ERR_OK) {
         NAS_MAC_LOG(ERR, "Object to Entry conversion failed ");
@@ -893,6 +920,11 @@ t_std_error nas_mac_cps_delete_entry (cps_api_object_t obj){
     if(flush_entry.entry.entry_type == NDI_MAC_ENTRY_TYPE_1Q ||
         flush_entry.entry.entry_type == NDI_MAC_ENTRY_TYPE_1D_LOCAL){
         nas_mac_fill_flush_entry(flush_entry);
+        if (flush_entry.entry.npu_configured == false) {
+            /*  if delete/flush request then it  should not be done in the NPU. return OK from here  */
+            NAS_MAC_LOG(INFO, " The MAC delete/flush request is not for NPU: ");
+            return STD_ERR_OK;
+        }
         return nas_mac_send_cps_event(&flush_entry,1);
     }else{
         if(!nas_mac_handle_remote_entry(flush_entry.entry,cps_api_oper_DELETE)){
@@ -963,19 +995,12 @@ static bool _subport_bridge_handler(nas_mac_entry_t & entry, cps_api_object_t ob
     cps_api_object_attr_t br_attr = cps_api_object_e_get(obj,ids,ids_len);
     if (br_attr) {
         const char *name = (const char *) cps_api_object_attr_data_bin(br_attr);
-        interface_ctrl_t i;
-        memset(&i,0,sizeof(i));
-        safestrncpy(i.if_name,name,sizeof(i.if_name));
-        i.q_type = HAL_INTF_INFO_FROM_IF_NAME;
-        if (dn_hal_get_interface_info(&i)!=STD_ERR_OK){
-            EV_LOGGING(L2MAC, DEBUG, "NAS-MAC",
-              "Can't get interface control information for %s",name);
+        if (nas_com_get_1d_br_untag_vid(name, entry.entry_key.vlan_id) != STD_ERR_OK) {
+            NAS_MAC_LOG(ERR, " Untagged Subport flush: falied to get vid for %s \n", name);
             return false;
         }
-        /* Find VLAN id for this bridge */
-        nas_mac_get_1d_br_untag_vid(i.if_index, entry.entry_key.vlan_id);
-        EV_LOGGING(L2MAC, DEBUG, "NAS-MAC", "Untagged subport flush :bridge ifindex %d ,untagged vlan id %d \n",
-                 i.if_index, entry.entry_key.vlan_id);
+        EV_LOGGING(L2MAC, DEBUG, "NAS-MAC", "Untagged subport flush :bridge ifindex %s ,untagged vlan id %d \n",
+                 name, entry.entry_key.vlan_id);
         return true;
      } else {
          NAS_MAC_LOG(ERR, " Untagged Subport flush : with no bridge name");
@@ -1168,8 +1193,8 @@ static bool nas_mac_flush_entries(cps_api_object_t obj,const cps_api_object_it_t
         if(_flush_type == BASE_MAC_MAC_FLUSH_TYPE_ENDPOINT_IP){
             nas_mac_flush_remote_ip(flush_queue,obj,ids,ids_len);
         }else{
-            auto it = _flush_fn_map.find(_flush_type);
-            if(it == _flush_fn_map.end()){
+            auto iter = _flush_fn_map.find(_flush_type);
+            if(iter == _flush_fn_map.end()){
                 NAS_MAC_LOG(ERR,"Invalid flush type passed %d",_flush_type);
                 continue;
             }
@@ -1291,9 +1316,14 @@ bool nas_get_mac_entry_from_ndi(nas_mac_entry_t & entry){
     memset(&ndi_entry,0,sizeof(ndi_entry));
     ndi_entry.vlan_id= entry.entry_key.vlan_id;
     memcpy(&ndi_entry.mac_addr,&entry.entry_key.mac_addr,sizeof(ndi_entry.mac_addr));
+    ndi_entry.mac_entry_type = entry.entry_type;
+    ndi_entry.bridge_id  = entry.bridge_id;
 
+    nas_mac_log_entry(&entry);
     if(ndi_get_mac_entry_attr(&ndi_entry) != STD_ERR_OK){
-        NAS_MAC_LOG(ERR,"Failed to get MAC entry from NDI");
+        /* It is expected to receive failure when the MAC is not present in the HW,
+         * dont log an error in this case. */
+        NAS_MAC_LOG(DEBUG,"Failed to get MAC entry from NDI");
         return false;
     }
 
@@ -1302,13 +1332,28 @@ bool nas_get_mac_entry_from_ndi(nas_mac_entry_t & entry){
     interface_ctrl_t intf_ctrl;
     memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
 
-    if(ndi_entry.ndi_lag_id){
+    if (ndi_entry.mac_entry_type == NDI_MAC_ENTRY_TYPE_1D_REMOTE) {
+        /* Publish ifindex of vtep */
+        std::string vtep_name;
+        nas_mac_get_vtep_name_from_tunnel_id(ndi_entry.endpoint_ip_port, vtep_name);
+        safestrncpy(intf_ctrl.if_name, vtep_name.c_str(), sizeof(intf_ctrl.if_name));
+        intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF_NAME;
+        if ((dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
+            NAS_MAC_LOG(ERR,"Failed to find vtep %d in interface ctrl blk ", vtep_name.c_str());
+        } else {
+            entry.ifindex =intf_ctrl.if_index;
+        }
+        return true;
+    }
+    /* Incase of mac entry returned for 1D local from NDI: vlanid 0 means untagged vlanid !0 means tagged */
 
-    if (nas_get_lag_if_index(ndi_entry.ndi_lag_id,&entry.ifindex) != STD_ERR_OK) {
+    /* Handling for 1Q  and ID local type */
+    if(ndi_entry.ndi_lag_id){
+        if (nas_get_lag_if_index(ndi_entry.ndi_lag_id,&entry.ifindex) != STD_ERR_OK) {
             NAS_MAC_LOG(ERR,"Failed to get Lag ifindex for ndi lag id 0x%lx",ndi_entry.ndi_lag_id);
             return false;
         }
-    } else {
+    }else{
         intf_ctrl.q_type = HAL_INTF_INFO_FROM_PORT;
         intf_ctrl.npu_id = ndi_entry.port_info.npu_id;
         intf_ctrl.port_id = ndi_entry.port_info.npu_port;
@@ -1418,8 +1463,9 @@ bool _process_bridge_event(const char * br_name, const char * vtep_name, bool ad
     intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF_NAME;
     strncpy(intf_ctrl.if_name,vtep_name,sizeof(intf_ctrl.if_name)-1);
     if (dn_hal_get_interface_info(&intf_ctrl) != STD_ERR_OK) {
-        NAS_MAC_LOG(ERR, "NDI MAC Get interface failed.");
-        return false;
+        NAS_MAC_LOG(DEBUG, "NDI MAC Get interface failed for %s", vtep_name);
+        /* Its possible its a tagged intf not created in OS and so doesn't exist in intf_crtl_blk */
+        return true;
     }
 
     /*  IF not VTEP member then ignore the event  */
