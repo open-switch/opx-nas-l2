@@ -77,6 +77,7 @@ struct nas_mac_entry_t {
     bool                        npu_configured=true;
     bool                        os_configured=false;
     bool                        is_static = false;
+    bool                        age_out_disable = false;
     bool                        publish=false;
     bool                        cache=false;
 };
@@ -161,8 +162,6 @@ t_std_error nas_mac_handle_if_down(hal_ifindex_t ifindex);
 /* consumer thread which dequeues the mac operation requests */
 void nas_l2_mac_npu_req_handler(void);
 
-void nas_l2_mac_cps_req_handler(void);
-
 /* Delete the mac entry from hw */
 t_std_error nas_mac_delete_entries_from_hw(nas_mac_entry_t *entry,ndi_mac_delete_type_t del_type);
 
@@ -202,10 +201,6 @@ bool nas_mac_get_vtep_name_from_tunnel_id(ndi_obj_id_t id, std::string & s);
 bool _process_bridge_event(const char * br_name, const char * vtep_name, bool add);
 
 bool nas_mac_update_remote_macs_cache(nas_mac_entry_t & entry,bool add);
-
-int nas_mac_get_read_cps_thread_fd();
-
-int nas_mac_get_write_cps_thread_fd();
 
 int nas_mac_get_read_npu_thread_fd();
 

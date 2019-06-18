@@ -73,7 +73,7 @@ bool nas_stg_exec_transaction(std::string op,cps_api_transaction_params_t *tran,
 bool nas_vlan_create(unsigned int vlan_id,bool del){
 
       cps_api_object_t obj = cps_api_object_create();
-
+       const char * mac =  "20:20:22:22:22:22";
       cps_api_key_from_attr_with_qual(cps_api_object_key(obj),
                                       DELL_BASE_IF_CMN_IF_INTERFACES_INTERFACE_OBJ,
                                       cps_api_qualifier_TARGET);
@@ -83,6 +83,7 @@ bool nas_vlan_create(unsigned int vlan_id,bool del){
            sizeof(IF_INTERFACE_TYPE_IANAIFT_IANA_INTERFACE_TYPE_IANAIFT_L2VLAN));
 
       cps_api_object_attr_add_u32(obj,BASE_IF_VLAN_IF_INTERFACES_INTERFACE_ID,vlan_id);
+      cps_api_object_attr_add(obj, DELL_IF_IF_INTERFACES_INTERFACE_PHYS_ADDRESS, mac, strlen(mac) + 1);
 
       cps_api_transaction_params_t tr;
       if ( cps_api_transaction_init(&tr) != cps_api_ret_code_OK ) return false;

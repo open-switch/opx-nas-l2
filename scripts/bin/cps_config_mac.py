@@ -21,6 +21,14 @@ ip_family_map = {
                   "ipv6" : 10
                 }
 
+action_map  = {
+        "drop": 1,
+        "forward" : 2,
+        "trap" : 3,
+        "log" : 4,
+        "source-drop" :5
+        }
+
 flush_map = {
                 "port": 1,
                 "port-vlan": 2,
@@ -56,6 +64,7 @@ def _create_1q_mac(args, parser):
     obj = CPSObject('base-mac/table',
                      data= {"switch-id" : 0, "mac-address" : args.mac,
                        "vlan" : args.vlan, "ifname":args.iface  })
+    obj.add_attr("actions", action_map[args.action])
     if args.static:
         obj.add_attr("static",args.static)
     if args.conf_os or args.conf_os_only:
@@ -93,12 +102,15 @@ def _create_1d_mac(args,parser):
             obj.add_attr_type("base-mac/forwarding-table/endpoint-ip/addr",args.af)
             obj.add_attr("base-mac/forwarding-table/endpoint-ip/addr",args.ip)
 
+    obj.add_attr("actions", action_map[args.action])
     if args.static:
         obj.add_attr("static",args.static)
     if args.conf_os or args.conf_os_only:
         obj.add_attr("configure-os",1)
     if args.conf_os_only:
         obj.add_attr("configure-npu",0)
+    if args.no_age_out:
+        obj.add_attr("age-out-disable",1)
     print obj.get()
     return commit(obj, "create")
 
@@ -148,6 +160,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description = 'Tool for FDB management')
     parser.add_argument('-o', '--oper', choices = ['create', 'delete', 'update'])
     parser.add_argument('-m','--mac',help=" MAC address")
+    parser.add_argument('-a','--action', choices = action_map, default="forward", help=" Packet Action")
     parser.add_argument('-i','--iface', help = 'Name of interface')
     parser.add_argument('-b','--bridge', help = 'Name of Bridge')
     parser.add_argument('-t','--type',choices = ["1Q","1D-Local","1D-Remote"], help = 'Type of MAC entry')
@@ -157,6 +170,7 @@ if __name__ == '__main__':
     parser.add_argument('-s','--static',action='store_true',  help = 'Static FDB entry')
     parser.add_argument('--conf-os',action='store_true',  help = 'Configure FDB entry in OS and in NPU')
     parser.add_argument('--conf-os-only',action='store_true',  help = 'Configure FDB entry in OS only')
+    parser.add_argument('--no-age-out',action='store_true',  help = 'Configure FDB entry with AGE OUT disabled')
     parser.add_argument('--del-type',choices = ["port","port-vlan","vlan","bridge","bridge-endpoint-ip","all",
                                                 "single","endpoint-ip","port-vlan-subport","port-bridge"],
                         help = 'Delete entry type')

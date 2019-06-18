@@ -120,7 +120,7 @@ bool nas_mac_vlan_create(bool del){
 
 bool nas_mac_create_test(){
 
-    mac_struct_t mac_list = { {0x0, 0x0, 0x0, 0x0, 0x0, 0x1}, 1 ,"e101-001-0"};
+    mac_struct_t mac_list = { {0x0, 0x0, 0x0, 0x0, 0x0, 0x1}, 1 ,"e101-030-0"};
     size_t fw_index = 5;
     size_t bw_index = 4;
     int index = if_nametoindex(mac_list.if_name);
@@ -166,7 +166,7 @@ bool nas_mac_create_test(){
 
 bool nas_mac_delete(int del_filter,hal_vlan_id_t vlan_id, const char * ifname){
 
-    mac_struct_t mac_list = { {0x0, 0x0, 0x0, 0x0, 0x0, 0x1}, 1 ,"e101-001-0"};
+    mac_struct_t mac_list = { {0x0, 0x0, 0x0, 0x0, 0x0, 0x1}, 1 ,"e101-030-0"};
 
     cps_api_transaction_params_t tran;
 
@@ -319,16 +319,16 @@ TEST(cps_api_events,mac_test) {
     ASSERT_TRUE(nas_mac_create_test());
 
     cout<<"DEL_MAC"<<endl;
-    ASSERT_TRUE(nas_mac_delete(DEL_MAC,1,"e101-001-0"));
+    ASSERT_TRUE(nas_mac_delete(DEL_MAC,1,"e101-030-0"));
 
     cout<<"DEL_IFINDEX "<<endl;
-    ASSERT_TRUE(nas_mac_delete(DEL_IFINDEX,0,"e101-001-0"));
+    ASSERT_TRUE(nas_mac_delete(DEL_IFINDEX,0,"e101-030-0"));
 
     cout<<"DEL_VLAN"<<endl;
     ASSERT_TRUE(nas_mac_delete(DEL_VLAN,1,NULL));
 
     cout<<"DEL_IFINDEX | VLAN"<<endl;
-    ASSERT_TRUE(nas_mac_delete(DEL_IFINDEX | DEL_VLAN,5,"e101-002-0"));
+    ASSERT_TRUE(nas_mac_delete(DEL_IFINDEX | DEL_VLAN,5,"e101-031-0"));
 
     cout<<"FLUSH ALL"<<endl;
     ASSERT_TRUE(nas_mac_delete(DEL_ALL,0,NULL));

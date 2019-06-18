@@ -26,4 +26,3 @@ apt-get install -y python-pytest
 ./nas_stg_unittest
 ./nas_sflow_unittest
 ./nas_mirror_unittest
-./nas_mcast_unittest
